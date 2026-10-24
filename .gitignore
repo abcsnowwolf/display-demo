@@ -1,0 +1,7 @@
+.pio
+.vscode
+.DS_Store
+build/
+fonts.bin
+tools/sim/out/
+tools/sim/sim

@@ -1,0 +1,1 @@
+{"type":"notice","level":"warning","title":"磁盘空间不足","message":"服务器 web-03 的 /var 分区使用率已达到 92%，主要占用来自 /var/log/nginx 目录下未轮转的访问日志（约 38GB）。建议立即清理旧日志，并检查 logrotate 配置是否生效，否则预计 6 小时内写满。"}

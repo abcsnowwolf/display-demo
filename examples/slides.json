@@ -1,0 +1,1 @@
+{"type":"slides","theme":"ocean","interval_s":6,"slides":[{"type":"text","text":"早上好 ☀"},{"type":"metrics","metrics":[{"label":"室外","value":18,"unit":"℃","icon":"wb_sunny","color":"amber"},{"label":"空气","value":"优","icon":"air","color":"green"}]}]}

@@ -1,0 +1,1 @@
+{"type":"metrics","theme":"light","title":"A 股收盘","icon":"show_chart","metrics":[{"label":"上证指数","value":3287.41,"trend":"up","note":"+1.23%"},{"label":"深证成指","value":10562.8,"trend":"down","note":"-0.45%"},{"label":"创业板指","value":2156.3,"trend":"up","note":"+0.87%"}]}

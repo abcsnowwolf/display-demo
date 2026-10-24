@@ -1,0 +1,1 @@
+{"type":"text","theme":"light","title":"MCP 简介","text":"Model Context Protocol（MCP）是一个开放协议，用于在大语言模型应用与外部数据源、工具之间建立标准化的连接。它定义了 tools、resources、prompts 等核心概念，让 AI 助手能够以统一的方式调用各种能力。本设备通过 HTTP 传输提供 MCP 服务，任何兼容的客户端都可以直接把文字、列表、指标展示到这块 2.4 寸屏幕上。配网则通过 BLE 上的 MCP 完成，无需额外的 App。"}
