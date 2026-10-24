@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "../third_party/stb_truetype.h"
+#include "GfxAlloc.h"
 
 enum FontFace : uint8_t {
     FACE_SANS,
@@ -84,8 +85,12 @@ private:
     void evict();
 
     Face faces_[FACE_COUNT];
-    std::list<CacheEntry> lru_;  // front = most recently used
-    std::unordered_map<uint64_t, std::list<CacheEntry>::iterator> index_;
+    using Lru = std::list<CacheEntry, GfxAllocator<CacheEntry>>;
+    using Index = std::unordered_map<uint64_t, Lru::iterator, std::hash<uint64_t>, std::equal_to<uint64_t>,
+                                     GfxAllocator<std::pair<const uint64_t, Lru::iterator>>>;
+
+    Lru lru_;  // front = most recently used
+    Index index_;
     size_t cacheBytes_ = 0;
     size_t cacheBudget_ = 64 * 1024;
 };

@@ -18,7 +18,7 @@ namespace {
 constexpr int WIDTH = SceneBuilder::WIDTH;
 constexpr int HEIGHT = SceneBuilder::HEIGHT;
 constexpr uint32_t TASK_STACK = 16384;
-constexpr size_t MAX_SAVED_BYTES = 12 * 1024;
+constexpr size_t MAX_SAVED_BYTES = 6 * 1024;  // nvs is 20 KiB, shared with WiFi
 constexpr const char* PREFS_NS = "display";
 constexpr const char* PREFS_KEY = "screen";
 
@@ -433,8 +433,9 @@ bool DisplayService::render(SceneReport* report, uint32_t* ms) {
     status_.pages = rep.pages;
     status_.remainingS = expireAt_ ? std::max<int32_t>(0, int32_t(expireAt_ - millis())) / 1000 : 0;
     xSemaphoreGive(lock_);
-    Serial.printf("[Display] %s rendered in %u ms (glyph cache %u KiB)\n", status_.screen.c_str(), unsigned(elapsed),
-                  unsigned(fonts_.cacheBytes() / 1024));
+    Serial.printf("[Display] %s rendered in %u ms (glyph cache %u KiB, internal heap %u KiB free)\n",
+                  status_.screen.c_str(), unsigned(elapsed), unsigned(fonts_.cacheBytes() / 1024),
+                  unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
     return true;
 }
 

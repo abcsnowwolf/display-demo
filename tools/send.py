@@ -23,13 +23,18 @@ TOOLS = {
 }
 
 
+# The device is on the LAN; an HTTP(S)_PROXY from the environment would only
+# swallow the request.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def rpc(url, method, params=None, rid=1):
     body = {"jsonrpc": "2.0", "id": rid, "method": method}
     if params is not None:
         body["params"] = params
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     req = urllib.request.Request(url, json.dumps(body).encode(), headers)
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with OPENER.open(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 
@@ -39,7 +44,7 @@ def main():
     ap.add_argument("screen", nargs="?", help="JSON file, or inline JSON with --tool")
     ap.add_argument("--tool", help="call this tool with the given arguments")
     ap.add_argument("--list", action="store_true", help="list the device's tools")
-    args = ap.parse_args()
+    args = ap.parse_intermixed_args()
 
     init = rpc(args.url, "initialize", {
         "protocolVersion": "2025-06-18",

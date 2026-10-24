@@ -2,7 +2,9 @@
 # The "fonts" partition holds the TrueType font pack written by
 # `pio run -t uploadfonts`; it is memory-mapped at runtime.
 # Name,   Type, SubType,  Offset,   Size
-nvs,      data, nvs,      0x9000,   0x7000
+nvs,      data, nvs,      0x9000,   0x5000
+# PlatformIO always writes boot_app0.bin here; keep it out of nvs.
+otadata,  data, ota,      0xe000,   0x2000
 app0,     app,  factory,  0x10000,  0x400000
 fonts,    data, 0x40,     0x410000, 0xBE0000
 coredump, data, coredump, 0xFF0000, 0x10000

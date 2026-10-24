@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <new>
 
 #ifdef ARDUINO
 #include <esp_heap_caps.h>
@@ -31,3 +32,27 @@ inline bool gfxHasPsram() {
     return true;
 #endif
 }
+
+/* STL allocator over gfxAlloc. Node-based containers (list, unordered_map)
+ * make many small allocations that malloc() would keep in internal RAM; a
+ * cache of thousands of glyphs then starves WiFi and TCP of internal heap. */
+template <typename T>
+struct GfxAllocator {
+    using value_type = T;
+
+    GfxAllocator() = default;
+    template <typename U>
+    GfxAllocator(const GfxAllocator<U>&) {}
+
+    T* allocate(size_t n) {
+        void* p = gfxAlloc(n * sizeof(T));
+        if (!p) abort();
+        return static_cast<T*>(p);
+    }
+    void deallocate(T* p, size_t) { gfxFree(p); }
+
+    template <typename U>
+    bool operator==(const GfxAllocator<U>&) const { return true; }
+    template <typename U>
+    bool operator!=(const GfxAllocator<U>&) const { return false; }
+};

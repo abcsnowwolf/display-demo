@@ -138,7 +138,8 @@ const GlyphBitmap* FontEngine::glyph(FontFace f, int glyph, int px) {
     float scale = face.scalePerPx * px;
     int x0, y0, x1, y1;
     stbtt_GetGlyphBitmapBox(&face.info, glyph, scale, scale, &x0, &y0, &x1, &y1);
-    CacheEntry entry{key, {int16_t(x1 - x0), int16_t(y1 - y0), int16_t(x0), int16_t(y0), nullptr}, 64};
+    // Base cost approximates the list and hash nodes, so the budget is honest.
+    CacheEntry entry{key, {int16_t(x1 - x0), int16_t(y1 - y0), int16_t(x0), int16_t(y0), nullptr}, 96};
     if (entry.bmp.w > 0 && entry.bmp.h > 0) {
         size_t n = size_t(entry.bmp.w) * entry.bmp.h;
         entry.bmp.alpha = static_cast<uint8_t*>(gfxAlloc(n));
