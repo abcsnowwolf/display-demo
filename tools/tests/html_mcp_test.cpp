@@ -33,6 +33,10 @@ DisplayService::Result DisplayService::toast(JsonDocument, uint32_t) { return {}
 DisplayService::Result DisplayService::clear(uint32_t) { return {}; }
 DisplayService::Result DisplayService::setBacklight(bool, uint32_t) { return {}; }
 DisplayService::Status DisplayService::status() { return {}; }
+DisplayService::Result DisplayService::canvasDraw(JsonDocument, uint32_t) { return {}; }
+DisplayService::Result DisplayService::canvasUpdate(JsonDocument, uint32_t) { return {}; }
+DisplayService::Result DisplayService::canvasRemove(JsonDocument, uint32_t) { return {}; }
+DisplayService::Result DisplayService::canvasGet(uint32_t) { return {}; }
 
 int main(int argc, char** argv) {
     assert(argc == 2);
@@ -41,7 +45,8 @@ int main(int argc, char** argv) {
     assert(fonts.begin(reinterpret_cast<const uint8_t*>(pack.data()), pack.size()));
     MCPServerBase registry;
     registerDisplayTools(registry);
-    assert(registry.tools.size() == 12);
+    assert(registry.tools.size() == 16);  // includes canvas_draw/update/remove/get
+    assert(registry.tools.count("show_html") && registry.tools.count("canvas_draw"));
     auto& tool = registry.tools.at("show_html");
     assert(tool.inputSchema.properties.at("html").type == "string");
     assert(tool.inputSchema.required == std::vector<String>{"html"});

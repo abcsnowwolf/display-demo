@@ -756,6 +756,330 @@ void buildMetrics(Ctx& c) {
     }
 }
 
+// A number in px, or a "50%" string relative to `total`.
+float coord(JsonVariantConst v, float total, float fallback = 0) {
+    if (v.is<float>()) return v.as<float>();
+    const char* s = v.as<const char*>();
+    if (!s || !*s) return fallback;
+    char* end = nullptr;
+    float f = strtof(s, &end);
+    if (end == s) return fallback;
+    return *end == '%' ? f * total / 100 : f;
+}
+
+/* Free-placed text. (x, y) is where the box's `anchor` point goes. Without
+ * w/h the box shrink-wraps the text at `size` (default 18), which together
+ * with bg/padding makes labels, badges and sticky notes; with w/h the text
+ * auto-fits the box unless size is given. */
+void drawTextElement(Ctx& c, JsonVariantConst e, float x, float y, float w, float h, const std::string& where) {
+    const char* anchor = e["anchor"] | "top-left";
+    float ax = 0, ay = 0;
+    if (strstr(anchor, "right")) ax = 1;
+    else if (strstr(anchor, "left")) ax = 0;
+    else if (strstr(anchor, "center") || !strcmp(anchor, "top") || !strcmp(anchor, "bottom")) ax = 0.5f;
+    if (strstr(anchor, "bottom")) ay = 1;
+    else if (strstr(anchor, "top")) ay = 0;
+    else if (strstr(anchor, "center") || !strcmp(anchor, "left") || !strcmp(anchor, "right")) ay = 0.5f;
+    if (!strstr(anchor, "left") && !strstr(anchor, "right") && !strstr(anchor, "top") && !strstr(anchor, "bottom") &&
+        strcmp(anchor, "center"))
+        c.warn(where + ": unknown anchor '" + anchor + "'");
+
+    RGBA bg = c.color(e["bg"], RGBA(), where.c_str());
+    RGBA border = c.color(e["border"], RGBA(), where.c_str());
+    float pad = e["padding"] | (bg.visible() || border.visible() ? 8.0f : 0.0f);
+    bool shrinkW = w <= 0, shrinkH = h <= 0;
+    float size = e["size"] | ((shrinkW || shrinkH) ? 18.0f : 0.0f);
+
+    uint32_t icon = c.icon(e["icon"], where.c_str());
+    float sizeForIcon = size > 0 ? size : std::max(14.0f, (h - 2 * pad) * 0.5f);
+    float iconSize = icon ? sizeForIcon * 1.15f : 0, iconW = icon ? iconSize + sizeForIcon * 0.35f : 0;
+
+    if (shrinkW) {
+        // As wide as the screen allows from the anchor, unless max_w says otherwise.
+        float room = ax == 0 ? W - x : (ax == 1 ? x : 2 * std::min(x, W - x));
+        w = std::max(24.0f, std::min(coord(e["max_w"], W, room), room));
+    }
+    TextStyle st = c.baseStyle(e["font"], e["bold"], c.color(e["color"], c.theme->text, where.c_str()));
+    Align align = c.parseAlign(e["align"], ax == 0.5f ? Align::Center : (ax == 1 ? Align::Right : Align::Left));
+    FitOptions o;
+    o.width = std::max(8.0f, w - 2 * pad - iconW);
+    o.height = shrinkH ? 1e6f : std::max(8.0f, h - 2 * pad);
+    o.size = size;
+    o.minSize = e["min_size"] | 10.0f;
+    o.maxSize = e["max_size"] | 96.0f;
+    o.lineHeight = e["line_height"] | 1.3f;
+    o.maxLines = e["max_lines"] | 0;
+    o.align = align;
+    Block b;
+    if (!c.fit(b, e["text"], st, c.markup(e["markup"]), o)) return;
+    if (shrinkW) {
+        // Re-layout at the text's own width so alignment is relative to it.
+        o.width = std::ceil(b.layout.width) + 1;
+        o.size = b.fit.size;
+        c.fit(b, e["text"], st, c.markup(e["markup"]), o);
+        w = o.width + 2 * pad + iconW;
+    }
+    if (shrinkH) h = std::max(b.layout.tightHeight(), iconSize) + 2 * pad;
+
+    float bx = x - w * ax, by = y - h * ay;
+    float radius = e["radius"] | (bg.visible() || border.visible() ? std::min(10.0f, h / 2) : 0.0f);
+    if (e["shadow"] | false) c.out.shadow(bx, by + 3, w, h, radius, 8, RGBA(0, 0, 0, c.theme->light ? 40 : 90));
+    c.out.roundRect(bx, by, w, h, radius, bg, border, border.visible() ? (e["border_width"] | 1.0f) : 0);
+    if (bx < -1 || by < -1 || bx + w > W + 1 || by + h > H + 1) c.warn(where + " extends past the screen edge");
+
+    Rect inner{bx + pad + iconW, by + pad, w - 2 * pad - iconW, h - 2 * pad};
+    VAlign va = c.parseVAlign(e["valign"], VAlign::Top);
+    if (icon) {
+        const LayoutLine& l0 = b.layout.lines[0];
+        // Centre the icon on the first line (or the whole block when it is one line).
+        float textH = b.layout.tightHeight();
+        float textTop = inner.y + (va == VAlign::Middle ? (inner.h - textH) / 2 : (va == VAlign::Bottom ? inner.h - textH : 0));
+        float mid = b.layout.lines.size() == 1 ? textTop + textH / 2 : textTop + (l0.height - l0.leading) / 2;
+        c.iconAt(icon, bx + pad, mid - iconSize / 2, iconSize, c.color(e["icon_color"], st.color, where.c_str()));
+    }
+    c.draw(b, inner, va);
+    c.noteTruncated(b, where.c_str());
+    if (c.rep.textSize == 0) c.rep.textSize = b.fit.size;
+}
+
+// Reads [[x,y],...] or a flat [x,y,x,y,...] into xy. Returns the point count.
+int readPoints(JsonVariantConst v, std::vector<float>& xy, int maxPoints) {
+    xy.clear();
+    JsonArrayConst a = v;
+    if (a.isNull()) return 0;
+    if (a[0].is<JsonArrayConst>()) {
+        for (JsonVariantConst p : a) {
+            if (int(xy.size()) / 2 >= maxPoints) break;
+            xy.push_back(p[0] | 0.0f);
+            xy.push_back(p[1] | 0.0f);
+        }
+    } else {
+        for (size_t i = 0; i + 1 < a.size() && int(xy.size()) / 2 < maxPoints; i += 2) {
+            xy.push_back(a[i] | 0.0f);
+            xy.push_back(a[i + 1] | 0.0f);
+        }
+    }
+    return int(xy.size() / 2);
+}
+
+/* Catmull-Rom through the points, so a few samples draw a smooth curve.
+ * Subdivision is capped at `maxPoints` output points: polygon fill cost grows
+ * with pixels x edges, which adds up on the ESP32. */
+void smoothPoints(std::vector<float>& xy, bool closed, int maxPoints) {
+    int n = int(xy.size() / 2);
+    if (n < 3) return;
+    int segments = closed ? n : n - 1;
+    const int STEPS = std::max(1, std::min(8, maxPoints / segments));
+    if (STEPS == 1) return;
+    std::vector<float> out;
+    auto pt = [&](int i, int k) {
+        i = closed ? ((i % n) + n) % n : std::max(0, std::min(n - 1, i));
+        return xy[2 * i + k];
+    };
+    for (int i = 0; i < segments; ++i) {
+        for (int s = 0; s < STEPS; ++s) {
+            float t = float(s) / STEPS, t2 = t * t, t3 = t2 * t;
+            for (int k = 0; k < 2; ++k) {
+                float p0 = pt(i - 1, k), p1 = pt(i, k), p2 = pt(i + 1, k), p3 = pt(i + 2, k);
+                out.push_back(0.5f * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+                                      (-p0 + 3 * p1 - 3 * p2 + p3) * t3));
+            }
+        }
+    }
+    if (!closed) {
+        out.push_back(xy[2 * (n - 1)]);
+        out.push_back(xy[2 * (n - 1) + 1]);
+    }
+    xy.swap(out);
+}
+
+void strokePoints(Ctx& c, const std::vector<float>& xy, bool closed, float width, RGBA color) {
+    int n = int(xy.size() / 2);
+    if (n == 1) c.out.circle(xy[0], xy[1], width / 2, color);
+    for (int i = 0; i + 1 < n; ++i) c.out.line(xy[2 * i], xy[2 * i + 1], xy[2 * i + 2], xy[2 * i + 3], width, color);
+    if (closed && n > 2) c.out.line(xy[2 * n - 2], xy[2 * n - 1], xy[0], xy[1], width, color);
+}
+
+void drawChart(Ctx& c, JsonVariantConst e, const std::string& where) {
+    float x = e["x"] | 0.0f, y = e["y"] | 0.0f, w = e["w"] | (W - x), h = e["h"] | (H - y);
+    // One series via values/type/color, or several via series[].
+    JsonDocument shorthand;
+    JsonArrayConst series = e["series"];
+    if (series.isNull()) {
+        JsonObject one = shorthand.to<JsonArray>().add<JsonObject>();
+        one["values"] = e["values"];
+        one["kind"] = e["kind"] | "line";
+        if (!e["color"].isNull()) one["color"] = e["color"];
+        series = shorthand.as<JsonArrayConst>();
+    }
+    float lo = 1e30f, hi = -1e30f;
+    size_t count = 0;
+    int bars = 0;
+    for (JsonVariantConst sr : series) {
+        JsonArrayConst vals = sr["values"];
+        count = std::max(count, vals.size());
+        for (JsonVariantConst v : vals) {
+            lo = std::min(lo, v.as<float>());
+            hi = std::max(hi, v.as<float>());
+        }
+        if (!strcmp(sr["kind"] | "line", "bar")) ++bars;
+    }
+    if (count == 0) {
+        c.warn(where + ": chart has no values");
+        return;
+    }
+    if (count > 128) {
+        c.warn(where + ": only the first 128 values are drawn");
+        count = 128;
+    }
+    if (bars) lo = std::min(lo, 0.0f);  // bars grow from zero
+    lo = e["min"] | lo;
+    hi = e["max"] | hi;
+    if (hi <= lo) hi = lo + 1;
+
+    TextStyle ls;
+    ls.color = c.theme->muted;
+    JsonArrayConst labels = e["labels"];
+    float plotH = labels.isNull() ? h : h - 16;
+    float plotX = x, plotW = w;
+    if (e["y_labels"] | false) {
+        char buf[3][24];
+        float vals[3] = {hi, (hi + lo) / 2, lo};
+        float labelW = 0;
+        for (int i = 0; i < 3; ++i) {
+            JsonDocument d;
+            d.set(std::round(vals[i] * 100) / 100);
+            snprintf(buf[i], sizeof(buf[i]), "%s", formatNumber(d.as<JsonVariantConst>()).c_str());
+            labelW = std::max(labelW, c.measure(buf[i], ls, 11));
+        }
+        for (int i = 0; i < 3; ++i)
+            c.label(buf[i], ls, {x, y + plotH * i / 2 - 7, labelW, 14}, 11, Align::Right);
+        plotX += labelW + 6;
+        plotW -= labelW + 6;
+    }
+    auto px = [&](size_t i) { return count == 1 ? plotX + plotW / 2 : plotX + plotW * i / (count - 1); };
+    auto py = [&](float v) { return y + plotH - (std::max(lo, std::min(hi, v)) - lo) / (hi - lo) * plotH; };
+
+    if (e["grid"] | true) {
+        for (int i = 0; i <= 4; ++i)
+            c.out.rect(int(plotX), int(y + plotH * i / 4), int(plotW), 1, c.theme->border.withAlpha(c.theme->border.a / 2 + 8));
+    }
+    // Bars share each slot side by side; lines and areas use slot centres.
+    float slot = plotW / count;
+    int barIdx = 0;
+    std::vector<float> xy;
+    for (JsonVariantConst sr : series) {
+        JsonArrayConst vals = sr["values"];
+        RGBA color = c.color(sr["color"], c.accent, where.c_str());
+        const char* type = sr["kind"] | "line";
+        size_t n = std::min(count, vals.size());
+        bool barSeries = !strcmp(type, "bar");
+        auto sx = [&](size_t i) { return bars ? plotX + slot * (i + 0.5f) : px(i); };
+        if (barSeries) {
+            float bw = slot * 0.7f / bars;
+            for (size_t i = 0; i < n; ++i) {
+                float v = vals[i].as<float>();
+                float top = py(std::max(v, 0.0f)), base = py(std::min(v, 0.0f));
+                float bx0 = plotX + slot * i + slot * 0.15f + bw * barIdx;
+                c.out.roundRect(bx0, top, std::max(1.0f, bw - 1), std::max(1.0f, base - top), std::min(3.0f, bw / 3), color);
+            }
+            ++barIdx;
+            continue;
+        }
+        xy.clear();
+        for (size_t i = 0; i < n; ++i) {
+            xy.push_back(sx(i));
+            xy.push_back(py(vals[i].as<float>()));
+        }
+        bool smooth = sr["smooth"] | (e["smooth"] | false);
+        std::vector<float> line = xy;
+        if (smooth) smoothPoints(line, false, 1024);
+        if (!strcmp(type, "area") && n >= 2) {
+            std::vector<float> poly = line;
+            poly.push_back(line[line.size() - 2]);
+            poly.push_back(y + plotH);
+            poly.push_back(line[0]);
+            poly.push_back(y + plotH);
+            c.out.polygon(poly.data(), int(poly.size() / 2), color.withAlpha(70));
+        } else if (strcmp(type, "line") && strcmp(type, "area")) {
+            c.warn(where + ": unknown series kind '" + type + "'");
+        }
+        strokePoints(c, line, false, sr["width"] | 2.5f, color);
+        if (sr["dots"] | (e["dots"] | false))
+            for (size_t i = 0; i < n; ++i) c.out.circle(xy[2 * i], xy[2 * i + 1], 3, color, c.theme->bgTop, 1.5f);
+    }
+    if (!labels.isNull()) {
+        size_t nl = labels.size();
+        float lw = plotW / std::max<size_t>(1, nl);
+        for (size_t i = 0; i < nl && i < count; ++i) {
+            float cx = bars ? plotX + slot * (i + 0.5f) : px(i);
+            const char* t = labels[i];
+            if (t) c.label(t, ls, {cx - lw / 2, y + plotH + 2, lw, 14}, 11, Align::Center, VAlign::Middle, 9);
+        }
+    }
+}
+
+// Shapes beyond the basic set. Returns false for types it does not handle.
+bool drawShape(Ctx& c, JsonVariantConst e, const char* type, const std::string& where) {
+    const char* w = where.c_str();
+    std::vector<float> xy;
+    if (!strcmp(type, "ellipse")) {
+        RGBA border = c.color(e["border"], RGBA(), w);
+        c.out.ellipse(e["cx"] | 0.0f, e["cy"] | 0.0f, e["rx"] | 20.0f, e["ry"] | 10.0f, c.color(e["fill"], c.accent, w),
+                      border, border.visible() ? (e["border_width"] | 1.0f) : 0);
+    } else if (!strcmp(type, "polygon")) {
+        if (readPoints(e["points"], xy, 64) < 3) {
+            c.warn(where + ": polygon needs at least 3 points");
+            return true;
+        }
+        if (e["smooth"] | false) smoothPoints(xy, true, 160);
+        RGBA border = c.color(e["border"], RGBA(), w);
+        c.out.polygon(xy.data(), int(xy.size() / 2), c.color(e["fill"], c.accent, w), border,
+                      border.visible() ? (e["border_width"] | 1.0f) : 0);
+    } else if (!strcmp(type, "polyline")) {
+        if (readPoints(e["points"], xy, 256) < 1) {
+            c.warn(where + ": polyline needs points");
+            return true;
+        }
+        bool closed = e["closed"] | false;
+        if (e["smooth"] | false) smoothPoints(xy, closed, 1024);
+        strokePoints(c, xy, closed, e["width"] | 2.0f, c.color(e["color"], c.accent, w));
+    } else if (!strcmp(type, "pixels")) {
+        JsonArrayConst rows = e["rows"];
+        JsonArrayConst pal = e["palette"];
+        if (rows.isNull() || pal.isNull()) {
+            c.warn(where + ": pixels needs rows and palette");
+            return true;
+        }
+        int ph = std::min<int>(rows.size(), 64), pw = 0;
+        for (int r = 0; r < ph; ++r) pw = std::max(pw, int(strlen(rows[r] | "")));
+        pw = std::min(pw, 64);
+        std::vector<RGBA> palette;
+        for (JsonVariantConst p : pal) {
+            if (palette.size() >= 16) break;
+            palette.push_back(c.color(p, RGBA(), w));
+        }
+        std::vector<uint8_t> px(pw * ph, 0xFF);
+        for (int r = 0; r < ph; ++r) {
+            const char* row = rows[r] | "";
+            for (int i = 0; i < pw && row[i]; ++i) {
+                char ch = row[i];
+                int v = ch >= '0' && ch <= '9' ? ch - '0' : (ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : (ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1));
+                if (v >= 0 && v < int(palette.size())) px[r * pw + i] = uint8_t(v);
+            }
+        }
+        float bw = e["w"] | 0.0f, bh = e["h"] | 0.0f;
+        int scale = e["scale"] | 0;
+        if (scale <= 0) scale = bw > 0 || bh > 0 ? std::max(1, int(std::min(bw > 0 ? bw / pw : 1e9f, bh > 0 ? bh / ph : 1e9f))) : 1;
+        c.out.bitmap(int(e["x"] | 0.0f), int(e["y"] | 0.0f), pw, ph, scale, px.data(), palette);
+    } else if (!strcmp(type, "chart")) {
+        drawChart(c, e, where);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 void buildLayout(Ctx& c) {
     const Spec& s = c.spec;
     c.begin();
@@ -767,10 +1091,15 @@ void buildLayout(Ctx& c) {
     int idx = 0;
     for (JsonVariantConst e : elements) {
         ++idx;
-        std::string where = "element " + std::to_string(idx);
-        const char* type = e["type"] | "";
-        float x = e["x"] | 0.0f, y = e["y"] | 0.0f, w = e["w"] | 0.0f, h = e["h"] | 0.0f;
-        if (!strcmp(type, "rect")) {
+        const char* id = e["id"];
+        std::string where = id ? std::string("element '") + id + "'" : "element " + std::to_string(idx);
+        if (!(e["visible"] | true)) continue;
+        // Text is the common case: an element with text and no type is text.
+        const char* type = e["type"] | (e["text"].isNull() ? "" : "text");
+        float x = coord(e["x"], W), y = coord(e["y"], H), w = coord(e["w"], W), h = coord(e["h"], H);
+        if (drawShape(c, e, type, where)) {
+            // ellipse, polygon, polyline, pixels, chart
+        } else if (!strcmp(type, "rect")) {
             const char* fill = e["fill"];
             RGBA border = c.color(e["border"], RGBA(), where.c_str());
             float radius = e["radius"] | 0.0f;
@@ -816,27 +1145,7 @@ void buildLayout(Ctx& c) {
             c.out.arc(e["cx"] | x, e["cy"] | y, e["r"] | 30.0f, e["thickness"] | 6.0f, e["start"] | 0.0f,
                       e["end"] | 90.0f, c.color(e["color"], c.accent, where.c_str()));
         } else if (!strcmp(type, "text")) {
-            if (w <= 0) w = W - x;
-            if (h <= 0) h = H - y;
-            float pad = e["padding"] | 0.0f;
-            RGBA bg = c.color(e["bg"], RGBA(), where.c_str());
-            if (bg.visible()) c.out.roundRect(x, y, w, h, e["radius"] | 0.0f, bg);
-            TextStyle st = c.baseStyle(e["font"], e["bold"], c.color(e["color"], c.theme->text, where.c_str()));
-            FitOptions o;
-            o.width = w - 2 * pad;
-            o.height = h - 2 * pad;
-            o.size = e["size"] | 0.0f;
-            o.minSize = e["min_size"] | 10.0f;
-            o.maxSize = e["max_size"] | 96.0f;
-            o.lineHeight = e["line_height"] | 1.3f;
-            o.maxLines = e["max_lines"] | 0;
-            o.align = c.parseAlign(e["align"], Align::Left);
-            Block b;
-            if (c.fit(b, e["text"], st, c.markup(e["markup"]), o)) {
-                c.draw(b, {x + pad, y + pad, o.width, o.height}, c.parseVAlign(e["valign"], VAlign::Top));
-                c.noteTruncated(b, where.c_str());
-                if (c.rep.textSize == 0) c.rep.textSize = b.fit.size;
-            }
+            drawTextElement(c, e, x, y, w, h, where);
         } else {
             c.warn(where + ": unknown type '" + type + "'");
         }
@@ -989,7 +1298,7 @@ bool SceneBuilder::build(JsonVariantConst spec, int slide, int page, DisplayList
         buildList(c, page);
     else if (!strcmp(type, "metrics"))
         buildMetrics(c);
-    else if (!strcmp(type, "layout"))
+    else if (!strcmp(type, "layout") || !strcmp(type, "canvas"))
         buildLayout(c);
     else if (!strcmp(type, "html")) {
         Rect area = c.begin();

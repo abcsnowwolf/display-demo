@@ -37,6 +37,12 @@ public:
     void line(float x1, float y1, float x2, float y2, float width, RGBA c);
     // Paints `color` through an 8-bit coverage mask.
     void mask(int x, int y, int w, int h, const uint8_t* alpha, RGBA color);
+    // Ellipse with an optional inside border (distance approximated by scaling).
+    void ellipse(float cx, float cy, float rx, float ry, RGBA fill, RGBA border = RGBA(), float borderWidth = 0);
+    // Simple (even-odd) polygon from n x/y pairs, with an optional inside border.
+    void polygon(const float* xy, int n, RGBA fill, RGBA border = RGBA(), float borderWidth = 0);
+    // Indexed pixel art: w*h palette indices (0xFF = transparent), each drawn as a scale x scale block.
+    void bitmap(int x, int y, int w, int h, int scale, const uint8_t* pixels, const RGBA* palette);
 
 private:
     void blend(int x, int y, RGBA c, int coverage);  // coverage 0..255, x/y screen coords

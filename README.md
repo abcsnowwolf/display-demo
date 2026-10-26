@@ -16,8 +16,8 @@ ESP32-S3 + 2.4 寸 320×240 彩屏信息屏。通过 BLE 上的 MCP 配网，联
   覆盖 GB2312 全部 6763 个汉字。
 - **自动排版**：自动选择能放下的最大字号；中文按字断行并遵守避头尾规则；居中文本做行长均衡，
   避免末行孤字；放不下时自动分页轮播。
-- **模板 + 自由画布**：文字、通知卡片、列表、指标仪表盘、轮播、Toast，以及可自由摆放形状/文字/图标/
-  进度环的 `show_layout`。8 套配色主题，支持内联富文本标记。
+- **模板 + 画板**：文字、通知卡片、列表、指标仪表盘、轮播、Toast；画板（`canvas_*`）可以把文字等信息
+  自由摆放在屏幕任意位置，按 id 单独修改、删除，内容掉电保持。8 套配色主题，支持内联富文本标记。
 - **HTML 灵活布局（第一版）**：`show_html` 支持受限 HTML/CSS 的横纵嵌套、比例分配、换行、
   对齐和尺寸约束，复用板端渲染器；不执行 JavaScript。[语法、示例和真实预览](docs/html-layout.md)。
 - **美观细节**：渐变背景（有序抖动消除 RGB565 色带）、SDF 抗锯齿圆角/圆环、半透明卡片、阴影。
@@ -88,9 +88,13 @@ python3 tools/send.py http://192.168.1.42:9000/mcp examples/metrics.json
 | `show_notice` | 状态卡片：大图标徽章 + 标题 + 内容；`level` = info/success/warning/error/tip/announcement |
 | `show_list` | 列表：bullet / number / check（待办）/ icon，每行可带右侧数值 |
 | `show_metrics` | 1–6 个指标卡片：标签、数值、单位、图标、趋势、进度条 |
-| `show_layout` | 自由画布：rect / text / icon / circle / line / progress / ring / arc |
+| `show_layout` | 一次性画出整屏自定义布局（元素同画板） |
 | `show_html` | 受限 HTML/CSS 盒布局：嵌套横纵排列、比例、换行和对齐；详细范围见 [HTML 布局](docs/html-layout.md) |
 | `show_slides` | 多个屏幕轮播，每页可以是以上任意模板 |
+| `canvas_draw` | 画板：在任意位置添加元素（主要是文字），同 id 则原地替换；`clear` 重新开始 |
+| `canvas_update` | 按 id 修改元素的部分字段（文字、位置、颜色、`visible`…），多个修改一次重绘 |
+| `canvas_remove` | 按 id 删除元素，或 `all` 清空 |
+| `canvas_get` | 读回画板上的所有元素 |
 | `notify` | 叠加在当前屏幕上的 Toast，几秒后消失 |
 | `clear_screen` | 回到主屏（时钟 + MCP 地址） |
 | `set_backlight` | 开关背光 |
@@ -119,6 +123,34 @@ python3 tools/send.py http://192.168.1.42:9000/mcp examples/metrics.json
 ```
 
 更多见 `examples/`（文件里的 `type` 对应工具名）。
+
+### 画板：自由摆放信息
+
+画板是一屏可以逐步编辑的元素：每个元素有 `id`，后续只改动需要变化的那一个，其它内容不受影响。
+文字元素可以省略 `type`：
+
+- `x`、`y` 是定位点，`anchor` 指定它是文本框的哪个角或边（`top-left`（默认）、`top`、`top-right`、
+  `left`、`center`、`right`、`bottom-left`、`bottom`、`bottom-right`）；坐标可写像素或 `"50%"`。
+- 不给 `w`/`h` 时文本框按 `size`（默认 18px）自动包住文字，配合 `bg`、`border`、`padding`、`shadow`
+  就是标签、徽章或便签；`max_w` 限制宽度后自动换行。给了 `w`/`h` 则在框内自适应字号。
+- `icon` 在文字前加图标；`visible: false` 暂时隐藏。
+
+```json
+{"name": "canvas_draw", "arguments": {"clear": true, "elements": [
+  {"id": "headline", "text": "**下午 3 点** 产品评审会", "x": "50%", "y": 72, "anchor": "center", "size": 24},
+  {"id": "weather", "text": "18° 多云", "icon": "cloud", "x": 304, "y": 12, "anchor": "top-right", "size": 15},
+  {"id": "note", "text": "记得给妈妈打电话", "x": 304, "y": 140, "anchor": "top-right", "max_w": 130,
+   "size": 14, "bg": "#fde68a", "color": "#3a3226", "shadow": true}]}}
+```
+
+```json
+{"name": "canvas_update", "arguments": {"updates": [
+  {"id": "headline", "text": "**下午 4 点** 评审会（改期）", "color": "amber"}]}}
+```
+
+除文字外，画板和 `show_layout` 还支持 rect、icon、circle、ellipse、line、polyline、polygon、
+pixels（像素画）、chart（折线/柱状/面积图）、progress、ring、arc，完整字段见工具描述。
+画板最多 200 个元素；JSON 不超过 6 KiB 时重启后自动恢复。
 
 ### 文本标记
 

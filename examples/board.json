@@ -1,0 +1,10 @@
+{"type":"layout","theme":"midnight","elements":[
+ {"id":"date","text":"10月25日 周日","x":16,"y":14,"size":15,"color":"muted"},
+ {"id":"weather","text":"18° 多云","icon":"cloud","x":304,"y":12,"anchor":"top-right","size":15,"icon_color":"sky"},
+ {"id":"headline","text":"**下午 3 点** 产品评审会","x":"50%","y":72,"anchor":"center","size":24},
+ {"id":"room","text":"3 楼 · 大会议室","x":"50%","y":104,"anchor":"center","size":15,"color":"muted"},
+ {"id":"todo","text":"带上新版原型\n准备 Q4 数据","icon":"checklist","x":16,"y":140,"size":15,"bg":"surface","border":"border"},
+ {"id":"note","text":"记得给妈妈打电话","x":304,"y":140,"anchor":"top-right","size":14,"max_w":130,"bg":"#fde68a","color":"#3a3226","shadow":true},
+ {"id":"status","text":"构建通过","icon":"check_circle","x":16,"y":228,"anchor":"bottom-left","size":13,"bg":"#22c55e33","color":"green"},
+ {"id":"count","text":"距离周末 **5** 天","x":304,"y":228,"anchor":"bottom-right","size":13,"color":"muted"}
+]}

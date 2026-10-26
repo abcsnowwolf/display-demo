@@ -1,0 +1,9 @@
+{"type":"layout","theme":"midnight","elements":[
+ {"type":"text","x":16,"y":12,"w":200,"h":24,"text":"**本周用电** kWh","size":17},
+ {"type":"text","x":200,"y":12,"w":104,"h":24,"text":"[color=success]↓ 12%[/color]","size":15,"align":"right"},
+ {"type":"chart","x":16,"y":48,"w":288,"h":120,"y_labels":true,"labels":["一","二","三","四","五","六","日"],
+  "series":[{"values":[8.2,7.5,9.1,6.8,7.9,11.2,10.4],"kind":"bar","color":"sky"},
+            {"values":[9,8.6,8.8,8.1,8.4,10.5,10.9],"kind":"line","color":"amber","smooth":true,"dots":true}]},
+ {"type":"chart","x":16,"y":184,"w":288,"h":44,"grid":false,"kind":"area","smooth":true,"color":"emerald",
+  "values":[3,5,4,7,6,9,8,11,10,12,9,13,12,15]}
+]}

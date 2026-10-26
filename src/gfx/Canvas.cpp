@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace {
 
@@ -210,6 +211,101 @@ void Canvas::mask(int x, int y, int w, int h, const uint8_t* alpha, RGBA color) 
         for (int xx = x0; xx < x1; ++xx) {
             uint8_t a = src[xx - x];
             if (a) blend(xx, yy, color, a);
+        }
+    }
+}
+
+void Canvas::ellipse(float cx, float cy, float rx, float ry, RGBA fill, RGBA border, float bw) {
+    if (rx <= 0 || ry <= 0) return;
+    if (!border.visible()) bw = 0;
+    int x0 = std::max(0, int(std::floor(cx - rx))), x1 = std::min(width_, int(std::ceil(cx + rx)));
+    int y0, y1;
+    if (x0 >= x1 || !clipRows(int(std::floor(cy - ry)), int(std::ceil(cy + ry)), y0, y1)) return;
+    float k = std::min(rx, ry);
+    for (int yy = y0; yy < y1; ++yy) {
+        float ny = (yy + 0.5f - cy) / ry;
+        for (int xx = x0; xx < x1; ++xx) {
+            float nx = (xx + 0.5f - cx) / rx;
+            float d = (std::sqrt(nx * nx + ny * ny) - 1) * k;
+            float outer = clamp01(0.5f - d);
+            if (outer <= 0) continue;
+            float inner = bw > 0 ? clamp01(0.5f - (d + bw)) : outer;
+            if (fill.visible() && inner > 0) blend(xx, yy, fill, int(inner * 255));
+            if (bw > 0 && outer > inner) blend(xx, yy, border, int((outer - inner) * 255));
+        }
+    }
+}
+
+void Canvas::polygon(const float* xy, int n, RGBA fill, RGBA border, float bw) {
+    if (n < 3) return;
+    float minX = xy[0], maxX = xy[0], minY = xy[1], maxY = xy[1];
+    for (int i = 1; i < n; ++i) {
+        minX = std::min(minX, xy[2 * i]);
+        maxX = std::max(maxX, xy[2 * i]);
+        minY = std::min(minY, xy[2 * i + 1]);
+        maxY = std::max(maxY, xy[2 * i + 1]);
+    }
+    int x0 = std::max(0, int(std::floor(minX))), x1 = std::min(width_, int(std::ceil(maxX)) + 1);
+    int y0, y1;
+    if (fill.visible() && x0 < x1 && clipRows(int(std::floor(minY)), int(std::ceil(maxY)) + 1, y0, y1)) {
+        /* Scanline fill, even-odd rule: 4 sub-scanlines per row, exact
+         * fractional coverage horizontally. Cost is rows x edges + pixels,
+         * where a per-pixel distance test was pixels x edges. */
+        const int SUB = 4;
+        std::vector<float> cover(x1 - x0);
+        std::vector<float> xs;
+        for (int yy = y0; yy < y1; ++yy) {
+            std::fill(cover.begin(), cover.end(), 0.0f);
+            bool any = false;
+            for (int s = 0; s < SUB; ++s) {
+                float sy = yy + (s + 0.5f) / SUB;
+                xs.clear();
+                for (int i = 0, j = n - 1; i < n; j = i++) {
+                    float ay = xy[2 * j + 1], by = xy[2 * i + 1];
+                    if ((ay > sy) == (by > sy)) continue;
+                    float ax = xy[2 * j], bx = xy[2 * i];
+                    xs.push_back(ax + (sy - ay) * (bx - ax) / (by - ay));
+                }
+                std::sort(xs.begin(), xs.end());
+                for (size_t k = 0; k + 1 < xs.size(); k += 2) {
+                    float a = std::max(xs[k], float(x0)), b = std::min(xs[k + 1], float(x1));
+                    if (b <= a) continue;
+                    any = true;
+                    int ia = int(a), ib = int(b);
+                    const float wgt = 1.0f / SUB;
+                    if (ia == ib) {
+                        cover[ia - x0] += (b - a) * wgt;
+                        continue;
+                    }
+                    cover[ia - x0] += (ia + 1 - a) * wgt;
+                    for (int i = ia + 1; i < ib; ++i) cover[i - x0] += wgt;
+                    if (ib < x1) cover[ib - x0] += (b - ib) * wgt;
+                }
+            }
+            if (!any) continue;
+            for (int xx = x0; xx < x1; ++xx) {
+                float cv = cover[xx - x0];
+                if (cv > 0) blend(xx, yy, fill, int(std::min(cv, 1.0f) * 255));
+            }
+        }
+    }
+    // Border is stroked centred on the outline; round caps close the joints.
+    if (border.visible() && bw > 0) {
+        for (int i = 0, j = n - 1; i < n; j = i++) line(xy[2 * j], xy[2 * j + 1], xy[2 * i], xy[2 * i + 1], bw, border);
+    }
+}
+
+void Canvas::bitmap(int x, int y, int w, int h, int scale, const uint8_t* pixels, const RGBA* palette) {
+    int y0, y1;
+    if (scale < 1 || !clipRows(y, y + h * scale, y0, y1)) return;
+    for (int yy = y0; yy < y1; ++yy) {
+        const uint8_t* row = pixels + ((yy - y) / scale) * w;
+        for (int i = 0; i < w; ++i) {
+            if (row[i] == 0xFF) continue;
+            RGBA c = palette[row[i]];
+            if (!c.visible()) continue;
+            int px0 = std::max(0, x + i * scale), px1 = std::min(width_, x + (i + 1) * scale);
+            for (int xx = px0; xx < px1; ++xx) blend(xx, yy, c, 255);
         }
     }
 }

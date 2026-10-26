@@ -21,6 +21,8 @@ constexpr uint32_t TASK_STACK = 16384;
 constexpr size_t MAX_SAVED_BYTES = 6 * 1024;  // nvs is 20 KiB, shared with WiFi
 constexpr const char* PREFS_NS = "display";
 constexpr const char* PREFS_KEY = "screen";
+constexpr size_t MAX_CANVAS_ELEMENTS = 200;
+constexpr uint32_t FLASH_SAVE_DELAY_MS = 3000;
 
 bool due(uint32_t at, uint32_t now) {
     return at && int32_t(now - at) >= 0;
@@ -167,6 +169,33 @@ DisplayService::Result DisplayService::clear(uint32_t timeoutMs) {
     return submit(req, timeoutMs);
 }
 
+DisplayService::Result DisplayService::canvasDraw(JsonDocument args, uint32_t timeoutMs) {
+    auto req = std::make_shared<Request>();
+    req->kind = Kind::CanvasDraw;
+    req->spec = std::move(args);
+    return submit(req, timeoutMs);
+}
+
+DisplayService::Result DisplayService::canvasUpdate(JsonDocument args, uint32_t timeoutMs) {
+    auto req = std::make_shared<Request>();
+    req->kind = Kind::CanvasUpdate;
+    req->spec = std::move(args);
+    return submit(req, timeoutMs);
+}
+
+DisplayService::Result DisplayService::canvasRemove(JsonDocument args, uint32_t timeoutMs) {
+    auto req = std::make_shared<Request>();
+    req->kind = Kind::CanvasRemove;
+    req->spec = std::move(args);
+    return submit(req, timeoutMs);
+}
+
+DisplayService::Result DisplayService::canvasGet(uint32_t timeoutMs) {
+    auto req = std::make_shared<Request>();
+    req->kind = Kind::CanvasGet;
+    return submit(req, timeoutMs);
+}
+
 DisplayService::Result DisplayService::setBacklight(bool on, uint32_t timeoutMs) {
     auto req = std::make_shared<Request>();
     req->kind = Kind::Backlight;
@@ -262,6 +291,7 @@ void DisplayService::run() {
             }
             dirty_ = true;
         }
+        if (due(flashSaveAt_, now)) flushSave();
         refreshClock();
 
         if (dirty_ && fontsReady_) {
@@ -277,7 +307,7 @@ void DisplayService::run() {
 
         uint32_t wait = 1000;
         now = millis();
-        for (uint32_t at : {rotateAt_, expireAt_, hasToast_ ? toastUntil_ : 0u}) {
+        for (uint32_t at : {rotateAt_, expireAt_, hasToast_ ? toastUntil_ : 0u, flashSaveAt_}) {
             if (at) wait = std::min<uint32_t>(wait, int32_t(at - now) > 0 ? at - now : 0);
         }
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(std::max<uint32_t>(wait, 10)));
@@ -290,7 +320,9 @@ void DisplayService::handle(Request& req) {
     // Read before handling: the spec is moved into the screen state.
     std::string type = req.spec["type"] | "";
     handleRequest(req);
-    static const char* const NAMES[] = {"show", "toast", "clear", "backlight"};
+    // Indexed by Kind.
+    static const char* const NAMES[] = {"show",        "toast",         "clear",         "backlight",
+                                        "canvas_draw", "canvas_update", "canvas_remove", "canvas_get"};
     const char* what = NAMES[int(req.kind)];
     const Result& res = req.result;
     if (!res.error.empty()) {
@@ -319,6 +351,12 @@ void DisplayService::handleRequest(Request& req) {
     }
 
     switch (req.kind) {
+        case Kind::CanvasDraw:
+        case Kind::CanvasUpdate:
+        case Kind::CanvasRemove:
+        case Kind::CanvasGet:
+            handleCanvas(req);
+            break;
         case Kind::Show: {
             JsonDocument prev = std::move(screen_);
             bool prevSystem = systemScreen_;
@@ -381,6 +419,109 @@ void DisplayService::handleRequest(Request& req) {
         default:
             break;
     }
+}
+
+void DisplayService::handleCanvas(Request& req) {
+    Result& res = req.result;
+    const JsonVariantConst args = req.spec.as<JsonVariantConst>();
+    bool isCanvas = !systemScreen_ && !strcmp(screen_["type"] | "", "canvas");
+
+    if (req.kind == Kind::CanvasGet) {
+        if (isCanvas) res.data.set(screen_);
+        res.elements = isCanvas ? int(screen_["elements"].size()) : 0;
+        res.ok = true;
+        return;
+    }
+
+    JsonDocument backup = psramDoc();
+    backup.set(screen_);
+    bool prevSystem = systemScreen_;
+    if (req.kind == Kind::CanvasDraw && (!isCanvas || (args["clear"] | false))) {
+        screen_.clear();
+        screen_["type"] = "canvas";
+        screen_["elements"].to<JsonArray>();
+        isCanvas = true;
+    }
+    if (!isCanvas) {
+        res.error = "nothing to edit: the screen is not a canvas, call canvas_draw first";
+        return;
+    }
+    // Screen-wide settings can change with any operation; null removes them.
+    for (JsonPairConst kv : args.as<JsonObjectConst>()) {
+        const char* key = kv.key().c_str();
+        if (strcmp(key, "theme") && strcmp(key, "background") && strcmp(key, "accent") && strcmp(key, "status_bar"))
+            continue;
+        if (kv.value().isNull())
+            screen_.remove(key);
+        else
+            screen_[key] = kv.value();
+    }
+
+    JsonArray els = screen_["elements"];
+    auto find = [&els](const char* id) -> int {
+        for (size_t i = 0; id && i < els.size(); ++i)
+            if (!strcmp(els[i]["id"] | "", id)) return int(i);
+        return -1;
+    };
+    std::vector<std::string> warnings;
+
+    if (req.kind == Kind::CanvasDraw) {
+        for (JsonVariantConst e : args["elements"].as<JsonArrayConst>()) {
+            int at = find(e["id"]);
+            if (at >= 0) {
+                els[at].set(e);
+            } else if (els.size() < MAX_CANVAS_ELEMENTS) {
+                els.add(e);
+            } else {
+                warnings.push_back("canvas is full (" + std::to_string(MAX_CANVAS_ELEMENTS) + " elements); some were dropped");
+                break;
+            }
+        }
+    } else if (req.kind == Kind::CanvasUpdate) {
+        for (JsonVariantConst u : args["updates"].as<JsonArrayConst>()) {
+            const char* id = u["id"];
+            int at = find(id);
+            if (at < 0) {
+                warnings.push_back(std::string("no element with id '") + (id ? id : "") + "'");
+                continue;
+            }
+            JsonObject el = els[at];
+            for (JsonPairConst kv : u.as<JsonObjectConst>()) {
+                if (!strcmp(kv.key().c_str(), "id")) continue;
+                if (kv.value().isNull())
+                    el.remove(kv.key().c_str());
+                else
+                    el[kv.key().c_str()] = kv.value();
+            }
+        }
+    } else {
+        if (args["all"] | false) {
+            els.clear();
+        } else {
+            for (JsonVariantConst id : args["ids"].as<JsonArrayConst>()) {
+                int at = find(id.as<const char*>());
+                if (at >= 0)
+                    els.remove(at);
+                else
+                    warnings.push_back(std::string("no element with id '") + (id.as<const char*>() ? id.as<const char*>() : "") + "'");
+            }
+        }
+    }
+
+    systemScreen_ = false;
+    slide_ = page_ = 0;
+    expireAt_ = 0;
+    if (!render(&res.report, &res.renderMs)) {
+        res.error = res.report.error;
+        screen_.set(backup);
+        systemScreen_ = prevSystem;
+        dirty_ = true;
+        return;
+    }
+    if (!save(screen_, true)) warnings.push_back("canvas is too large to survive a reboot (limit 6 KiB of JSON)");
+    res.report.warnings.insert(res.report.warnings.end(), warnings.begin(), warnings.end());
+    res.elements = int(els.size());
+    res.ok = true;
 }
 
 void DisplayService::selectSystemScreen() {
@@ -486,23 +627,35 @@ void DisplayService::loadSaved() {
     prefs.end();
 }
 
-bool DisplayService::save(const JsonDocument& spec) {
-    std::string json;
-    serializeJson(spec, json);
-    if (json.size() > MAX_SAVED_BYTES) {
-        Serial.printf("[Display] screen not saved: %u bytes > %u\n", unsigned(json.size()), unsigned(MAX_SAVED_BYTES));
+bool DisplayService::save(const JsonDocument& spec, bool deferFlash) {
+    size_t bytes = measureJson(spec);
+    if (bytes > MAX_SAVED_BYTES) {
+        Serial.printf("[Display] screen not saved: %u bytes > %u\n", unsigned(bytes), unsigned(MAX_SAVED_BYTES));
         return false;
     }
     saved_ = spec;
+    if (deferFlash) {
+        flashSaveAt_ = millis() + FLASH_SAVE_DELAY_MS;
+    } else {
+        flushSave();
+    }
+    return true;
+}
+
+void DisplayService::flushSave() {
+    flashSaveAt_ = 0;
+    if (saved_.isNull()) return;
+    std::string json;
+    serializeJson(saved_, json);
     Preferences prefs;
-    if (!prefs.begin(PREFS_NS, false)) return true;
+    if (!prefs.begin(PREFS_NS, false)) return;
     prefs.putBytes(PREFS_KEY, json.data(), json.size());
     prefs.end();
-    return true;
 }
 
 void DisplayService::forgetSaved() {
     saved_.clear();
+    flashSaveAt_ = 0;
     Preferences prefs;
     if (!prefs.begin(PREFS_NS, false)) return;
     prefs.remove(PREFS_KEY);

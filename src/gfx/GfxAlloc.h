@@ -21,6 +21,15 @@ inline void* gfxAlloc(size_t size) {
 #endif
 }
 
+inline void* gfxRealloc(void* p, size_t size) {
+#ifdef ARDUINO
+    void* q = heap_caps_realloc(p, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return q ? q : realloc(p, size);
+#else
+    return realloc(p, size);
+#endif
+}
+
 inline void gfxFree(void* p) {
     free(p);
 }

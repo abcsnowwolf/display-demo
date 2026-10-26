@@ -1,0 +1,10 @@
+{"type":"layout","background":"#0b1020,#1e1b4b","elements":[
+ {"id":"sun","type":"circle","cx":250,"cy":60,"r":28,"fill":"#fbbf24"},
+ {"type":"ellipse","cx":250,"cy":60,"rx":44,"ry":44,"fill":"#fbbf2420"},
+ {"type":"polygon","points":[[0,190],[70,110],[120,160],[180,90],[260,170],[320,130],[320,240],[0,240]],"fill":"#312e81"},
+ {"type":"polygon","points":[[0,215],[90,170],[160,205],[240,160],[320,200],[320,240],[0,240]],"fill":"#4c1d95","smooth":false},
+ {"type":"polyline","points":[[20,40],[60,20],[100,50],[140,25],[180,45]],"smooth":true,"width":3,"color":"#f0abfc"},
+ {"type":"pixels","x":24,"y":70,"scale":4,"palette":["#000000","#ef4444","#fbbf24","#ffffff"],
+  "rows":["..1111..",".111111.","11311311","11111111","11111111",".122221.","..1111..","...11..."]},
+ {"type":"text","x":16,"y":200,"w":288,"h":30,"text":"[font=display]晚安，世界[/font]","size":26,"color":"#fde68a","align":"right"}
+]}

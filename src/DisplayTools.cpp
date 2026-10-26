@@ -166,7 +166,7 @@ void registerScreenTool(MCPServerBase& server, const char* name, const char* typ
                 return toJson(invalid, isError);
             }
         }
-        JsonDocument spec;
+        JsonDocument spec = psramDoc();
         spec.set(params);
         spec["type"] = screenType;
         return toJson(display.show(std::move(spec)), isError);
@@ -260,35 +260,47 @@ void registerShowMetrics(MCPServerBase& server) {
 }
 
 const char* const LAYOUT_HELP =
-    "Free-form canvas, 320x240 px, origin top-left. Elements paint in order. Types and fields:\n"
+    "Free-form 320x240 px canvas, origin top-left. Elements paint in order (later on top). Any element may "
+    "have visible:false. Colors accept #RRGGBBAA for transparency. Types and fields:\n"
     "- rect: x,y,w,h, fill (color or \"c1,c2\" gradient when radius is 0; default surface), radius, border, "
     "border_width, shadow\n"
     "- text: x,y,w,h box, text (markup), font, bold, size (omit = auto-fit to box), min_size, max_size, color, "
     "align, valign (top/middle/bottom), line_height, max_lines, bg, radius, padding\n"
     "- icon: name, x,y (top-left) or x,y,w,h (centered in box), size, color\n"
     "- circle: cx, cy, r, fill, border, border_width\n"
-    "- line: x1,y1,x2,y2, width, color\n"
+    "- ellipse: cx, cy, rx, ry, fill, border, border_width\n"
+    "- line: x1,y1,x2,y2, width, color (round caps)\n"
+    "- polyline: points [[x,y],...] (max 256), width, color, closed, smooth (Catmull-Rom curve through points)\n"
+    "- polygon: points [[x,y],...] (3-64), fill, border, border_width, smooth\n"
+    "- pixels: pixel art. x, y, palette (up to 16 colors), rows (strings, one hex digit 0-f per pixel indexing "
+    "the palette, any other char = transparent; max 64x64), scale (block size) or w/h to fit\n"
+    "- chart: x,y,w,h, values + kind (line|bar|area) + color, or series [{values, kind, color, smooth, dots, "
+    "width}] (max 128 points); min, max, labels (x-axis strings), y_labels, grid (default true), smooth, dots\n"
     "- progress: x,y,w,h, value 0-100, color, track, radius\n"
     "- ring: cx, cy, r, thickness, value 0-100 (clockwise from 12 o'clock), color, track\n"
     "- arc: cx, cy, r, thickness, start, end (degrees, 0 = 12 o'clock, clockwise), color";
 
-void registerShowLayout(MCPServerBase& server) {
+Properties elementSchema(bool withId) {
     Properties el = objectSchema();
-    el.description = LAYOUT_HELP;
-    el.properties["type"] = enumProp("Element kind", {"rect", "text", "icon", "circle", "line", "progress", "ring", "arc"});
+    el.properties["type"] = enumProp("Element kind", {"rect", "text", "icon", "circle", "ellipse", "line", "polyline",
+                                                      "polygon", "pixels", "chart", "progress", "ring", "arc"});
+    if (withId) el.properties["id"] = prop("string", "Name for later canvas_update / canvas_remove; reusing an id replaces that element");
     el.properties["x"] = prop("number", "Left edge, px");
     el.properties["y"] = prop("number", "Top edge, px");
     el.properties["w"] = prop("number", "Width, px");
     el.properties["h"] = prop("number", "Height, px");
     el.required = {"type"};
+    return el;
+}
 
+void registerShowLayout(MCPServerBase& server) {
     Properties s = objectSchema();
-    s.properties["elements"] = arrayOf(std::move(el), LAYOUT_HELP);
+    s.properties["elements"] = arrayOf(elementSchema(false), LAYOUT_HELP);
     addScreenProps(s);
     s.required = {"elements"};
     registerScreenTool(server, "show_layout", "layout",
-                       "Compose a custom screen from positioned shapes, text boxes, icons, progress bars and "
-                       "rings, for designs the templates don't cover. Text boxes auto-fit when size is omitted.",
+                       "Compose a whole custom screen in one call from positioned shapes, text, icons, charts and "
+                       "pixel art. For a drawing you build up and edit step by step, use the canvas_* tools.",
                        std::move(s));
 }
 
@@ -304,6 +316,117 @@ void registerShowHtml(MCPServerBase& server) {
         "wrapping, alignment, size constraints and inline bold/color/size formatting. Unsupported CSS or "
         "tags are ignored and listed in warnings; scripts and embedded media are refused and keep the "
         "previous screen. Call get_display_info first.", std::move(s));
+}
+
+// Canvas tools answer with the element count on top of the usual result.
+JsonDocument canvasJson(const DisplayService::Result& r, bool& isError) {
+    JsonDocument out = toJson(r, isError);
+    if (r.ok && r.elements >= 0) out["elements"] = r.elements;
+    return out;
+}
+
+Properties canvasResultSchema() {
+    Properties s = resultSchema();
+    s.properties["elements"] = prop("integer", "Elements on the canvas after this call");
+    return s;
+}
+
+void addCanvasScreenProps(Properties& s) {
+    s.properties["theme"] = themeProp();
+    s.properties["background"] = prop("string", "Canvas background: a color or \"c1,c2\" vertical gradient");
+    s.properties["accent"] = prop("string", "Default color for shapes without one");
+    s.properties["status_bar"] = prop("boolean", "Show the clock + WiFi bar");
+}
+
+void registerCanvasTools(MCPServerBase& server) {
+    {
+        Tool tool;
+        tool.name = "canvas_draw";
+        tool.description =
+            "Drawing board: add elements to a persistent 320x240 canvas without redrawing the rest. Give "
+            "elements an id to edit or remove them later; drawing an existing id replaces it in place. The first "
+            "call (or clear:true) starts a fresh canvas, replacing whatever screen was shown.";
+        Properties s = objectSchema();
+        s.properties["elements"] = arrayOf(elementSchema(true), LAYOUT_HELP);
+        s.properties["clear"] = prop("boolean", "Start from an empty canvas");
+        addCanvasScreenProps(s);
+        tool.inputSchema = std::move(s);
+        tool.outputSchema = canvasResultSchema();
+        tool.handler = std::make_shared<FnHandler>([](JsonVariantConst params, bool& isError) {
+            JsonDocument args = psramDoc();
+            args.set(params);
+            return canvasJson(display.canvasDraw(std::move(args)), isError);
+        });
+        server.RegisterTool(std::move(tool));
+    }
+    {
+        Tool tool;
+        tool.name = "canvas_update";
+        tool.description =
+            "Change fields of existing canvas elements by id, e.g. move a shape, recolor it, change a value or "
+            "text, or hide it with visible:false. Only the given fields change; a null value removes a field. "
+            "Several elements update in one redraw.";
+        Properties u = objectSchema();
+        u.description = "id plus the fields to change";
+        u.properties["id"] = prop("string", "Element to change");
+        u.required = {"id"};
+        Properties s = objectSchema();
+        s.properties["updates"] = arrayOf(std::move(u), "Changes to apply");
+        addCanvasScreenProps(s);
+        s.required = {"updates"};
+        tool.inputSchema = std::move(s);
+        tool.outputSchema = canvasResultSchema();
+        tool.handler = std::make_shared<FnHandler>([](JsonVariantConst params, bool& isError) {
+            JsonDocument args = psramDoc();
+            args.set(params);
+            return canvasJson(display.canvasUpdate(std::move(args)), isError);
+        });
+        server.RegisterTool(std::move(tool));
+    }
+    {
+        Tool tool;
+        tool.name = "canvas_remove";
+        tool.description = "Delete canvas elements by id, or everything with all:true (the canvas stays, empty).";
+        Properties s = objectSchema();
+        s.properties["ids"] = arrayOf(prop("string", "id"), "Elements to delete");
+        s.properties["all"] = prop("boolean", "Delete every element");
+        tool.inputSchema = std::move(s);
+        tool.outputSchema = canvasResultSchema();
+        tool.handler = std::make_shared<FnHandler>([](JsonVariantConst params, bool& isError) {
+            JsonDocument args = psramDoc();
+            args.set(params);
+            return canvasJson(display.canvasRemove(std::move(args)), isError);
+        });
+        server.RegisterTool(std::move(tool));
+    }
+    {
+        Tool tool;
+        tool.name = "canvas_get";
+        tool.description = "Read back the canvas: its settings and every element with its id, in paint order.";
+        tool.inputSchema = objectSchema();
+        Properties out = objectSchema();
+        out.properties["active"] = prop("boolean", "True when the screen currently shows the canvas");
+        out.properties["elements"] = arrayOf(objectSchema(), "Elements in paint order");
+        out.properties["theme"] = prop("string", "Canvas theme");
+        out.properties["background"] = prop("string", "Canvas background");
+        out.required = {"active", "elements"};
+        tool.outputSchema = std::move(out);
+        tool.handler = std::make_shared<FnHandler>([](JsonVariantConst, bool& isError) {
+            DisplayService::Result r = display.canvasGet();
+            isError = !r.ok;
+            JsonDocument out = psramDoc();
+            if (!r.ok) {
+                out["error"] = r.error;
+                return out;
+            }
+            out.set(r.data);
+            out.remove("type");
+            out["active"] = !r.data.isNull();
+            if (!out["elements"].is<JsonArray>()) out["elements"].to<JsonArray>();
+            return out;
+        });
+        server.RegisterTool(std::move(tool));
+    }
 }
 
 void registerShowSlides(MCPServerBase& server) {
@@ -342,7 +465,7 @@ void registerNotify(MCPServerBase& server) {
     tool.inputSchema = std::move(s);
     tool.outputSchema = resultSchema();
     tool.handler = std::make_shared<FnHandler>([](JsonVariantConst params, bool& isError) {
-        JsonDocument spec;
+        JsonDocument spec = psramDoc();
         spec.set(params);
         return toJson(display.toast(std::move(spec)), isError);
     });
@@ -450,6 +573,7 @@ void registerDisplayTools(MCPServerBase& server) {
     registerShowLayout(server);
     registerShowHtml(server);
     registerShowSlides(server);
+    registerCanvasTools(server);
     registerNotify(server);
     registerClear(server);
     registerBacklight(server);

@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "PsramJson.h"
 #include "gfx/DisplayList.h"
 #include "gfx/FontEngine.h"
 #include "gfx/Scenes.h"
@@ -25,6 +26,8 @@ public:
         std::string error;
         SceneReport report;
         uint32_t renderMs = 0;
+        int elements = -1;   // canvas element count after the operation
+        JsonDocument data{PsramJsonAllocator::instance()};  // canvas_get payload
     };
 
     struct Status {
@@ -45,15 +48,23 @@ public:
     Result clear(uint32_t timeoutMs = 8000);
     Result setBacklight(bool on, uint32_t timeoutMs = 2000);
 
+    /* Canvas: a screen of id-addressable elements edited incrementally.
+     * draw adds or replaces (by id), update merges fields into elements by id,
+     * remove deletes by id; get returns the current canvas. */
+    Result canvasDraw(JsonDocument args, uint32_t timeoutMs = 8000);
+    Result canvasUpdate(JsonDocument args, uint32_t timeoutMs = 8000);
+    Result canvasRemove(JsonDocument args, uint32_t timeoutMs = 8000);
+    Result canvasGet(uint32_t timeoutMs = 2000);
+
     // Main loop: publish network state for the system screens and status bar.
     void updateSystem(const SystemInfo& info);
     Status status();
 
 private:
-    enum class Kind : uint8_t { Show, Toast, Clear, Backlight };
+    enum class Kind : uint8_t { Show, Toast, Clear, Backlight, CanvasDraw, CanvasUpdate, CanvasRemove, CanvasGet };
     struct Request {
         Kind kind;
-        JsonDocument spec;
+        JsonDocument spec{PsramJsonAllocator::instance()};
         bool flag = false;
         Result result;
         SemaphoreHandle_t done = nullptr;
@@ -67,6 +78,7 @@ private:
     void run();
     void handle(Request& req);
     void handleRequest(Request& req);
+    void handleCanvas(Request& req);
     bool mapFonts();
     void showFontError();
     void refreshClock();
@@ -75,8 +87,10 @@ private:
     bool render(SceneReport* report = nullptr, uint32_t* ms = nullptr);
     void scheduleRotation();
     void loadSaved();
-    // False when the spec is too large to persist.
-    bool save(const JsonDocument& spec);
+    // Remembers `spec` for restore; the flash write can be deferred so rapid
+    // canvas edits don't wear NVS. Returns false when it is too large.
+    bool save(const JsonDocument& spec, bool deferFlash = false);
+    void flushSave();
     void forgetSaved();
 
     TaskHandle_t task_ = nullptr;
@@ -95,9 +109,10 @@ private:
     bool fontsReady_ = false;
     bool backlight_ = true;
 
-    JsonDocument screen_;   // user screen; null = system screen
-    JsonDocument saved_;    // persisted user screen, restored once online
-    JsonDocument toast_;
+    JsonDocument screen_{PsramJsonAllocator::instance()};  // user screen; null = system screen
+    JsonDocument saved_{PsramJsonAllocator::instance()};   // persisted user screen, restored once online
+    JsonDocument toast_{PsramJsonAllocator::instance()};
+    uint32_t flashSaveAt_ = 0;
     bool hasToast_ = false;
     bool systemScreen_ = true;
     std::string systemType_;

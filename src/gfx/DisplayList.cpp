@@ -6,6 +6,9 @@
 void DisplayList::clear() {
     ops_.clear();
     glyphs_.clear();
+    points_.clear();
+    pixels_.clear();
+    palette_.clear();
 }
 
 void DisplayList::clip(int x, int y, int w, int h) {
@@ -64,6 +67,36 @@ void DisplayList::arc(float cx, float cy, float r, float thickness, float startD
 void DisplayList::line(float x1, float y1, float x2, float y2, float width, RGBA c) {
     if (!c.visible()) return;
     push(Kind::Line, {x1, y1, x2, y2, width}, c, RGBA(), std::min(y1, y2) - width, std::max(y1, y2) + width);
+}
+
+void DisplayList::ellipse(float cx, float cy, float rx, float ry, RGBA fill, RGBA border, float bw) {
+    if (!fill.visible() && (!border.visible() || bw <= 0)) return;
+    push(Kind::Ellipse, {cx, cy, rx, ry, bw}, fill, border, cy - ry, cy + ry);
+}
+
+void DisplayList::polygon(const float* xy, int n, RGBA fill, RGBA border, float bw) {
+    if (n < 3 || (!fill.visible() && (!border.visible() || bw <= 0))) return;
+    float top = xy[1], bottom = xy[1];
+    for (int i = 1; i < n; ++i) {
+        top = std::min(top, xy[2 * i + 1]);
+        bottom = std::max(bottom, xy[2 * i + 1]);
+    }
+    push(Kind::Polygon, {bw}, fill, border, top - 1, bottom + 1);
+    ops_.back().first = uint32_t(points_.size());
+    ops_.back().count = uint32_t(n);
+    points_.insert(points_.end(), xy, xy + 2 * n);
+}
+
+void DisplayList::bitmap(int x, int y, int w, int h, int scale, const uint8_t* pixels,
+                         const std::vector<RGBA>& palette) {
+    if (w <= 0 || h <= 0 || scale < 1) return;
+    // f[4] = palette offset; first/count index the pixels.
+    push(Kind::Bitmap, {float(x), float(y), float(w), float(h), float(scale), float(palette_.size())}, RGBA(), RGBA(),
+         y, y + h * scale);
+    ops_.back().first = uint32_t(pixels_.size());
+    ops_.back().count = uint32_t(w * h);
+    pixels_.insert(pixels_.end(), pixels, pixels + w * h);
+    palette_.insert(palette_.end(), palette.begin(), palette.end());
 }
 
 void DisplayList::text(const TextLayout& layout, const RichText& rich, float x, float y, int firstLine,
@@ -162,6 +195,16 @@ void DisplayList::render(Canvas& canvas, FontEngine& fonts) const {
                 break;
             case Kind::Line:
                 canvas.line(f[0], f[1], f[2], f[3], f[4], op.c1);
+                break;
+            case Kind::Ellipse:
+                canvas.ellipse(f[0], f[1], f[2], f[3], op.c1, op.c2, f[4]);
+                break;
+            case Kind::Polygon:
+                canvas.polygon(points_.data() + op.first, int(op.count), op.c1, op.c2, f[0]);
+                break;
+            case Kind::Bitmap:
+                canvas.bitmap(int(f[0]), int(f[1]), int(f[2]), int(f[3]), int(f[4]), pixels_.data() + op.first,
+                              palette_.data() + int(f[5]));
                 break;
             case Kind::Glyphs:
                 for (uint32_t i = op.first; i < op.first + op.count; ++i) {
