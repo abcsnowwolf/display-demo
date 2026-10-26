@@ -66,6 +66,7 @@ private:
     static void taskEntry(void* arg);
     void run();
     void handle(Request& req);
+    void handleRequest(Request& req);
     bool mapFonts();
     void showFontError();
     void refreshClock();
@@ -74,7 +75,8 @@ private:
     bool render(SceneReport* report = nullptr, uint32_t* ms = nullptr);
     void scheduleRotation();
     void loadSaved();
-    void save(const JsonDocument& spec);
+    // False when the spec is too large to persist.
+    bool save(const JsonDocument& spec);
     void forgetSaved();
 
     TaskHandle_t task_ = nullptr;

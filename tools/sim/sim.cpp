@@ -26,6 +26,8 @@ static void printReport(const char* what, const SceneReport& rep) {
     printf("%s: pages=%d slides=%d textSize=%.0f%s%s\n", what, rep.pages, rep.slides, rep.textSize,
            rep.error.empty() ? "" : " error=", rep.error.c_str());
     for (const auto& w : rep.warnings) printf("  warning: %s\n", w.c_str());
+    if (rep.htmlNodes) printf("html: nodes=%zu layout_steps=%zu text_work=%zu codepoints\n",
+        rep.htmlNodes, rep.htmlSteps, rep.htmlTextWork);
 }
 
 int main(int argc, char** argv) {
@@ -42,7 +44,11 @@ int main(int argc, char** argv) {
     fonts.setCacheBudget(4 << 20);
 
     JsonDocument spec;
-    if (DeserializationError err = deserializeJson(spec, readFile(argv[2]))) {
+    const std::string path = argv[2];
+    if (path.size() >= 5 && path.substr(path.size() - 5) == ".html") {
+        spec["type"] = "html";
+        spec["html"] = readFile(argv[2]);
+    } else if (DeserializationError err = deserializeJson(spec, readFile(argv[2]))) {
         fprintf(stderr, "spec: %s\n", err.c_str());
         return 1;
     }
@@ -61,8 +67,9 @@ int main(int argc, char** argv) {
     SceneReport rep;
     int slide = argc > 4 ? atoi(argv[4]) : 0, page = argc > 5 ? atoi(argv[5]) : 0;
     auto t0 = std::chrono::steady_clock::now();
-    builder.build(spec.as<JsonVariantConst>(), slide, page, list, rep);
+    bool ok = builder.build(spec.as<JsonVariantConst>(), slide, page, list, rep);
     printReport("scene", rep);
+    if (!ok) return 1;
     if (argc > 6) {
         JsonDocument toast;
         deserializeJson(toast, readFile(argv[6]));

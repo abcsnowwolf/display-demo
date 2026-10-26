@@ -11,12 +11,15 @@ ESP32-S3 + 2.4 寸 320×240 彩屏信息屏。通过 BLE 上的 MCP 配网，联
   用 `config_wifi` 下发 Wi-Fi，连上后自动启动 HTTP MCP（`http://<ip>:9000/mcp`，并通过 mDNS
   广播 `_mcp._tcp`）。Wi-Fi 凭据保存在 NVS，重启自动重连。
 - **矢量字体实时渲染**：设备端用 stb_truetype 光栅化 OpenType 字体，任意字号、抗锯齿，
-  无需预先生成点阵。内置思源黑体（常规/粗体）、霞鹜文楷、得意黑三种中文字体 + Material 图标字体，
+  无需预先生成点阵。内置思源黑体（常规/粗体）、霞鹜文楷、得意黑三种中文字体 + Material 图标字体
+  + Twemoji 彩色 emoji（COLR/CPAL 分层渲染），
   覆盖 GB2312 全部 6763 个汉字。
 - **自动排版**：自动选择能放下的最大字号；中文按字断行并遵守避头尾规则；居中文本做行长均衡，
   避免末行孤字；放不下时自动分页轮播。
 - **模板 + 自由画布**：文字、通知卡片、列表、指标仪表盘、轮播、Toast，以及可自由摆放形状/文字/图标/
   进度环的 `show_layout`。8 套配色主题，支持内联富文本标记。
+- **HTML 灵活布局（第一版）**：`show_html` 支持受限 HTML/CSS 的横纵嵌套、比例分配、换行、
+  对齐和尺寸约束，复用板端渲染器；不执行 JavaScript。[语法、示例和真实预览](docs/html-layout.md)。
 - **美观细节**：渐变背景（有序抖动消除 RGB565 色带）、SDF 抗锯齿圆角/圆环、半透明卡片、阴影。
 - **掉电保持**：最后一个常驻屏幕保存在 NVS，重启联网后恢复；空闲时显示时钟和 MCP 地址。
 
@@ -37,7 +40,7 @@ pio run -t upload        # 烧录固件
 ```
 
 ```bash
-pio run -t uploadfonts   # 烧录字体分区（约 8 MB，只需一次，换字体后再执行）
+pio run -t uploadfonts   # 烧录字体分区（约 9 MB，只需一次，换字体后再执行）
 ```
 
 ```bash
@@ -86,6 +89,7 @@ python3 tools/send.py http://192.168.1.42:9000/mcp examples/metrics.json
 | `show_list` | 列表：bullet / number / check（待办）/ icon，每行可带右侧数值 |
 | `show_metrics` | 1–6 个指标卡片：标签、数值、单位、图标、趋势、进度条 |
 | `show_layout` | 自由画布：rect / text / icon / circle / line / progress / ring / arc |
+| `show_html` | 受限 HTML/CSS 盒布局：嵌套横纵排列、比例、换行和对齐；详细范围见 [HTML 布局](docs/html-layout.md) |
 | `show_slides` | 多个屏幕轮播，每页可以是以上任意模板 |
 | `notify` | 叠加在当前屏幕上的 Toast，几秒后消失 |
 | `clear_screen` | 回到主屏（时钟 + MCP 地址） |
@@ -137,7 +141,10 @@ python3 tools/send.py http://192.168.1.42:9000/mcp examples/metrics.json
 | `kai` | 霞鹜文楷 LXGW WenKai | 诗词、引言、温和的提示 |
 | `display` | 得意黑 Smiley Sans | 标题、大号数字 |
 
-缺字时依次回退到其它字体。图标为 Material Icons Round 精选的 145 个，完整列表见
+缺字时依次回退到其它字体。文本中的 emoji 直接显示为彩色（Twemoji，1388 个单码位 emoji；
+设备不做字形组合，ZWJ 组合如 👨‍👩‍👧 会拆成单个 emoji，肤色修饰和国旗会退化）。
+Emoji 图形来自 [Twemoji](https://github.com/twitter/twemoji)，© Twitter, Inc. 及其他贡献者，CC-BY 4.0。
+图标为 Material Icons Round 精选的 145 个，完整列表见
 `fonts/icons.txt` 或 `get_display_info`。字体来源与许可证见 [fonts/README.md](fonts/README.md)。
 
 ## 桌面预览
@@ -151,6 +158,9 @@ pio pkg install && tools/sim/build.sh
 ```bash
 python3 tools/build_fonts.py && tools/sim/sim fonts.bin examples/list.json out.png
 ```
+
+HTML 片段可直接预览：`tools/sim/sim fonts.bin examples/html/nested.html out.png`。
+运行 `tools/sim/render_html_examples.sh` 可重新生成四组 HTML 预览。
 
 ## 代码结构
 

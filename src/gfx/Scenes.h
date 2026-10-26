@@ -33,6 +33,7 @@ struct SceneReport {
     int slides = 1;        // number of slides when type == "slides"
     float textSize = 0;    // fitted size of the primary text, px
     bool usesClock = false;  // re-render once a minute
+    size_t htmlNodes = 0, htmlSteps = 0, htmlTextWork = 0;
     std::vector<std::string> warnings;
     std::string error;     // non-empty: the spec was rejected, nothing to show
 };

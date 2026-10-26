@@ -8,6 +8,7 @@
 
 #include "DisplayService.h"
 #include "gfx/Icons.h"
+#include "gfx/HtmlLayout.h"
 #include "gfx/Style.h"
 
 namespace {
@@ -71,7 +72,7 @@ const char* const COLOR_HELP =
     "(text, muted, accent, surface, border, success, warning, danger)";
 
 const char* const MARKUP_HELP =
-    " Inline markup: **bold**, [color=red]..[/color], [bg=amber]highlight[/bg], [size=1.5]..[/size] "
+    " Color emoji are supported. Inline markup: **bold**, [color=red]..[/color], [bg=amber]highlight[/bg], [size=1.5]..[/size] "
     "(relative), [font=kai]..[/font], [u]underline[/u]; \\n for line breaks.";
 
 // Keys shared by every full-screen tool.
@@ -127,6 +128,11 @@ JsonDocument toJson(const DisplayService::Result& r, bool& isError) {
     out["slides"] = r.report.slides;
     if (r.report.textSize > 0) out["text_size"] = r.report.textSize;
     out["render_ms"] = r.renderMs;
+    if (r.report.htmlNodes) {
+        out["html_nodes"] = r.report.htmlNodes;
+        out["html_layout_steps"] = r.report.htmlSteps;
+        out["html_text_work"] = r.report.htmlTextWork;
+    }
     if (!r.report.warnings.empty()) {
         JsonArray w = out["warnings"].to<JsonArray>();
         for (const auto& s : r.report.warnings) w.add(s);
@@ -143,7 +149,23 @@ void registerScreenTool(MCPServerBase& server, const char* name, const char* typ
     tool.inputSchema = std::move(input);
     tool.outputSchema = resultSchema();
     std::string screenType = type;
+    if (screenType == "html") {
+        tool.outputSchema.properties["html_nodes"] = prop("integer", "HTML nodes including viewport");
+        tool.outputSchema.properties["html_layout_steps"] = prop("integer", "Bounded HTML layout work units");
+        tool.outputSchema.properties["html_text_work"] = prop("integer", "Codepoints processed across HTML text measurements");
+    }
     tool.handler = std::make_shared<FnHandler>([screenType](JsonVariantConst params, bool& isError) {
+        if (screenType == "html") {
+            JsonString html = params["html"].as<JsonString>();
+            if (!params.is<JsonObjectConst>() || html.isNull() || html.size() == 0 || html.size() > HtmlLayout::MAX_BYTES) {
+                DisplayService::Result invalid;
+                invalid.error = "html must be a UTF-8 string of 1..12288 bytes";
+#ifdef ARDUINO
+                Serial.printf("[Display] rejected show html: %s (%u bytes)\n", invalid.error.c_str(), unsigned(html.size()));
+#endif
+                return toJson(invalid, isError);
+            }
+        }
         JsonDocument spec;
         spec.set(params);
         spec["type"] = screenType;
@@ -270,6 +292,20 @@ void registerShowLayout(MCPServerBase& server) {
                        std::move(s));
 }
 
+void registerShowHtml(MCPServerBase& server) {
+    Properties s = objectSchema();
+    s.properties["html"] = prop("string", "UTF-8 fragment. Call get_display_info for html_layout syntax/limits. "
+        "Example: <div style='display:flex;height:100%;gap:8px;padding:12px'>"
+        "<p style='flex:2;background:surface'>Left</p><p style='flex:1'>Right</p></div>");
+    addScreenProps(s);
+    s.required = {"html"};
+    registerScreenTool(server, "show_html", "html",
+        "Show a flexible nested HTML/CSS subset layout (not a browser). Supports rows/columns, ratios, "
+        "wrapping, alignment, size constraints and inline bold/color/size formatting. Unsupported CSS or "
+        "tags are ignored and listed in warnings; scripts and embedded media are refused and keep the "
+        "previous screen. Call get_display_info first.", std::move(s));
+}
+
 void registerShowSlides(MCPServerBase& server) {
     Properties slide = objectSchema();
     slide.description =
@@ -355,6 +391,7 @@ void registerDisplayInfo(MCPServerBase& server) {
     out.properties["icons"] = prop("string", "Comma-separated icon names");
     out.properties["colors"] = prop("string", "Color syntax");
     out.properties["markup"] = prop("string", "Inline text markup");
+    out.properties["html_layout"] = prop("string", "show_html v1 syntax, semantics and limits");
     out.properties["current"] = objectSchema();
     out.properties["current"].description = "What is on screen now";
     out.required = {"width", "height", "themes", "fonts", "icons", "current"};
@@ -384,6 +421,7 @@ void registerDisplayInfo(MCPServerBase& server) {
         r["icons"] = iconNameList();
         r["colors"] = COLOR_HELP;
         r["markup"] = MARKUP_HELP + 1;
+        r["html_layout"] = HtmlLayout::help();
         DisplayService::Status st = display.status();
         JsonObject cur = r["current"].to<JsonObject>();
         cur["screen"] = st.screen;
@@ -410,6 +448,7 @@ void registerDisplayTools(MCPServerBase& server) {
     registerShowList(server);
     registerShowMetrics(server);
     registerShowLayout(server);
+    registerShowHtml(server);
     registerShowSlides(server);
     registerNotify(server);
     registerClear(server);

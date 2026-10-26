@@ -27,16 +27,26 @@ float roundRectSdf(float px, float py, float cx, float cy, float hx, float hy, f
 }  // namespace
 
 Canvas::Canvas(uint16_t* buffer, int width, int bandY, int bandHeight)
-    : buf_(buffer), width_(width), bandY_(bandY), bandH_(bandHeight) {}
+    : buf_(buffer), width_(width), bandY_(bandY), bandH_(bandHeight) { resetClip(); }
+
+void Canvas::resetClip() {
+    clipX0_ = 0; clipX1_ = width_;
+    clipY0_ = bandY_; clipY1_ = bandY_ + bandH_;
+}
+
+void Canvas::setClip(int x, int y, int w, int h) {
+    clipX0_ = std::max(0, x); clipX1_ = std::min(width_, x + std::max(0, w));
+    clipY0_ = std::max(bandY_, y); clipY1_ = std::min(bandY_ + bandH_, y + std::max(0, h));
+}
 
 bool Canvas::clipRows(int y0, int y1, int& from, int& to) const {
-    from = std::max(y0, bandY_);
-    to = std::min(y1, bandY_ + bandH_);
+    from = std::max(y0, clipY0_);
+    to = std::min(y1, clipY1_);
     return from < to;
 }
 
 void Canvas::blend(int x, int y, RGBA c, int coverage) {
-    if (x < 0 || x >= width_ || y < bandY_ || y >= bandY_ + bandH_) return;
+    if (x < clipX0_ || x >= clipX1_ || y < clipY0_ || y >= clipY1_) return;
     int a = (c.a * coverage + 127) / 255;
     if (a <= 0) return;
     uint16_t& px = buf_[(y - bandY_) * width_ + x];
@@ -54,7 +64,7 @@ void Canvas::blend(int x, int y, RGBA c, int coverage) {
 
 void Canvas::fillRect(int x, int y, int w, int h, RGBA c) {
     if (!c.visible()) return;
-    int x0 = std::max(x, 0), x1 = std::min(x + w, width_);
+    int x0 = std::max(x, clipX0_), x1 = std::min(x + w, clipX1_);
     int y0, y1;
     if (x0 >= x1 || !clipRows(y, y + h, y0, y1)) return;
     if (c.a == 255) {
@@ -67,7 +77,7 @@ void Canvas::fillRect(int x, int y, int w, int h, RGBA c) {
 }
 
 void Canvas::gradientRect(int x, int y, int w, int h, RGBA top, RGBA bottom) {
-    int x0 = std::max(x, 0), x1 = std::min(x + w, width_);
+    int x0 = std::max(x, clipX0_), x1 = std::min(x + w, clipX1_);
     int y0, y1;
     if (x0 >= x1 || h <= 0 || !clipRows(y, y + h, y0, y1)) return;
     for (int yy = y0; yy < y1; ++yy) {

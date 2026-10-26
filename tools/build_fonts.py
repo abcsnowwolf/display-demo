@@ -24,6 +24,7 @@ FONTS = [
     ("kai", "kai.ttf"),
     ("display", "display.otf"),
     ("icons", "icons.otf"),
+    ("emoji", "emoji.ttf"),
 ]
 
 

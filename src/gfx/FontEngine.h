@@ -7,6 +7,7 @@
 
 #include "../third_party/stb_truetype.h"
 #include "GfxAlloc.h"
+#include "Style.h"
 
 enum FontFace : uint8_t {
     FACE_SANS,
@@ -14,6 +15,7 @@ enum FontFace : uint8_t {
     FACE_KAI,
     FACE_DISPLAY,
     FACE_ICONS,
+    FACE_EMOJI,  // Twemoji, COLR/CPAL color layers
     FACE_COUNT,
 };
 
@@ -62,6 +64,15 @@ public:
     float ascent(FontFace f, float px) const;
     float descent(FontFace f, float px) const;
 
+    /* COLR v0 color glyphs. colorLayers returns how many layers `glyph` is
+     * painted with (0 = an ordinary glyph) and the index of the first;
+     * colorLayer gives a layer's outline glyph and palette color, or
+     * foreground = true when it takes the text color. */
+    int colorLayers(FontFace f, int glyph, int& first) const;
+    void colorLayer(FontFace f, int index, int& glyph, RGBA& color, bool& foreground) const;
+    // Codepoints shown as emoji by default (Unicode Emoji_Presentation, approximated).
+    static bool isEmojiPresentation(uint32_t cp);
+
     // Rendered glyph, cached. The pointer stays valid until the next call.
     const GlyphBitmap* glyph(FontFace f, int glyph, int px);
 
@@ -75,7 +86,13 @@ private:
         float ascent = 0.88f;  // em fractions
         float descent = 0.12f;
         bool loaded = false;
+        // COLR v0 / CPAL palette 0, when present.
+        const uint8_t* baseGlyphs = nullptr;  // {glyph, firstLayer, numLayers} x numBase
+        const uint8_t* layers = nullptr;      // {glyph, paletteIndex} x numLayers
+        const uint8_t* palette = nullptr;     // BGRA x paletteSize
+        uint16_t numBase = 0, numLayers = 0, paletteSize = 0;
     };
+    static void loadColorTables(Face& face, const uint8_t* font, size_t size);
     struct CacheEntry {
         uint64_t key;
         GlyphBitmap bmp;

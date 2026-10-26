@@ -16,7 +16,8 @@ constexpr const char* BLE_INSTRUCTIONS = "Provision WiFi for the ESP32 MCP displ
 constexpr const char* HTTP_INSTRUCTIONS =
     "A 320x240 color LCD for showing information to people nearby. Use show_text for messages, show_notice "
     "for alerts, show_list for to-dos/agendas, show_metrics for numbers, show_slides to rotate screens, "
-    "notify for a transient toast, and show_layout for custom designs (call get_display_info first). "
+    "notify for a transient toast, show_layout for positioned shapes, and show_html for flexible nested "
+    "HTML/CSS subset layouts (call get_display_info first). "
     "Chinese and English text are fully supported; text auto-fits, so prefer omitting size.";
 constexpr uint32_t WIFI_TRANSPORT_CHECK_INTERVAL_MS = 3000;
 constexpr uint32_t HEAP_REPORT_INTERVAL_MS = 60000;

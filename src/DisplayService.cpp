@@ -284,7 +284,25 @@ void DisplayService::run() {
     }
 }
 
+// Rejections are otherwise only visible to the MCP client; log them so a
+// failed write can be diagnosed from the serial console.
 void DisplayService::handle(Request& req) {
+    // Read before handling: the spec is moved into the screen state.
+    std::string type = req.spec["type"] | "";
+    handleRequest(req);
+    static const char* const NAMES[] = {"show", "toast", "clear", "backlight"};
+    const char* what = NAMES[int(req.kind)];
+    const Result& res = req.result;
+    if (!res.error.empty()) {
+        Serial.printf("[Display] rejected %s %s: %s\n", what, type.c_str(), res.error.c_str());
+    } else if (!res.report.warnings.empty()) {
+        std::string joined;
+        for (const auto& w : res.report.warnings) joined += (joined.empty() ? "" : "; ") + w;
+        Serial.printf("[Display] %s %s warnings: %s\n", what, type.c_str(), joined.c_str());
+    }
+}
+
+void DisplayService::handleRequest(Request& req) {
     Result& res = req.result;
     if (req.kind == Kind::Backlight) {
         backlight_ = req.flag;
@@ -321,7 +339,13 @@ void DisplayService::handle(Request& req) {
             expireAt_ = duration > 0 ? millis() + uint32_t(duration * 1000) : 0;
             // Timed screens are interruptions; they don't replace what is saved.
             if (duration <= 0 && (screen_["persist"] | true)) {
-                save(screen_);
+                // Too large for NVS: still show it, but drop the old saved
+                // screen so a reboot can't bring back unrelated content.
+                if (!save(screen_)) {
+                    forgetSaved();
+                    res.report.warnings.push_back("shown but not saved: larger than the 6144-byte limit for "
+                                                  "restoring after a reboot");
+                }
             } else if (duration <= 0) {
                 forgetSaved();
             }
@@ -462,18 +486,19 @@ void DisplayService::loadSaved() {
     prefs.end();
 }
 
-void DisplayService::save(const JsonDocument& spec) {
+bool DisplayService::save(const JsonDocument& spec) {
     std::string json;
     serializeJson(spec, json);
     if (json.size() > MAX_SAVED_BYTES) {
-        Serial.println("[Display] screen too large to persist");
-        return;
+        Serial.printf("[Display] screen not saved: %u bytes > %u\n", unsigned(json.size()), unsigned(MAX_SAVED_BYTES));
+        return false;
     }
     saved_ = spec;
     Preferences prefs;
-    if (!prefs.begin(PREFS_NS, false)) return;
+    if (!prefs.begin(PREFS_NS, false)) return true;
     prefs.putBytes(PREFS_KEY, json.data(), json.size());
     prefs.end();
+    return true;
 }
 
 void DisplayService::forgetSaved() {

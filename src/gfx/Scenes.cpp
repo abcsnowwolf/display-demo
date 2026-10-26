@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "Icons.h"
+#include "HtmlLayout.h"
 #include "Utf8.h"
 
 namespace {
@@ -960,6 +961,14 @@ bool SceneBuilder::build(JsonVariantConst spec, int slide, int page, DisplayList
             rep.error = "slides must be a non-empty array";
             return false;
         }
+        // V1 accepts HTML as a standalone screen. Reject it throughout a deck,
+        // before accepting a first valid slide with a later invalid fragment.
+        for (JsonVariantConst item : slides) {
+            if (!strcmp(item["type"] | "", "html")) {
+                rep.error = "HTML v1 requires show_html; HTML in slides is not supported";
+                return false;
+            }
+        }
         rep.slides = int(slides.size());
         slide = std::max(0, std::min(slide, rep.slides - 1));
         s = Spec{slides[slide], spec};
@@ -982,6 +991,21 @@ bool SceneBuilder::build(JsonVariantConst spec, int slide, int page, DisplayList
         buildMetrics(c);
     else if (!strcmp(type, "layout"))
         buildLayout(c);
+    else if (!strcmp(type, "html")) {
+        Rect area = c.begin();
+        HtmlLayout::Report html;
+        JsonString source = s["html"].as<JsonString>();
+        Theme htmlTheme = *c.theme;
+        htmlTheme.accent = c.accent;
+        HtmlLayout::build(source.c_str(), source.size(), fonts_, htmlTheme,
+                          {area.x, area.y, area.w, area.h}, out, html);
+        rep.error = html.error;
+        rep.htmlNodes = html.nodes;
+        rep.htmlSteps = html.steps;
+        rep.htmlTextWork = html.textWork;
+        rep.warnings.insert(rep.warnings.end(), html.warnings.begin(), html.warnings.end());
+        if (html.clipped) rep.warnings.push_back("HTML content overflow: clipped or ellipsized to its box");
+    }
     else if (!strcmp(type, "home"))
         buildHome(c);
     else if (!strcmp(type, "setup"))

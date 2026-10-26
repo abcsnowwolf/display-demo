@@ -19,6 +19,7 @@ TOOLS = {
     "list": "show_list",
     "metrics": "show_metrics",
     "layout": "show_layout",
+    "html": "show_html",
     "slides": "show_slides",
 }
 
@@ -33,7 +34,7 @@ def rpc(url, method, params=None, rid=1):
     if params is not None:
         body["params"] = params
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-    req = urllib.request.Request(url, json.dumps(body).encode(), headers)
+    req = urllib.request.Request(url, json.dumps(body, ensure_ascii=False).encode("utf-8"), headers)
     with OPENER.open(req, timeout=30) as resp:
         return json.loads(resp.read())
 
@@ -41,7 +42,7 @@ def rpc(url, method, params=None, rid=1):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
-    ap.add_argument("screen", nargs="?", help="JSON file, or inline JSON with --tool")
+    ap.add_argument("screen", nargs="?", help="JSON/HTML file, or inline JSON with --tool")
     ap.add_argument("--tool", help="call this tool with the given arguments")
     ap.add_argument("--list", action="store_true", help="list the device's tools")
     args = ap.parse_intermixed_args()
@@ -64,6 +65,10 @@ def main():
         tool = args.tool
         text = args.screen if args.screen.lstrip().startswith("{") else open(args.screen).read()
         params = json.loads(text)
+    elif args.screen.endswith(".html"):
+        with open(args.screen, encoding="utf-8") as source:
+            params = {"html": source.read(), "persist": False}
+        tool = "show_html"
     else:
         params = json.load(open(args.screen))
         tool = TOOLS.get(params.pop("type", None), "notify")

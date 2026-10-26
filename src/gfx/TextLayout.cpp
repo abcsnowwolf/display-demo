@@ -15,6 +15,18 @@ bool isCjk(uint32_t c) {
            (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFFEF) || c >= 0x20000;
 }
 
+bool isEmojiBlock(uint32_t c) {
+    return (c >= 0x1F000 && c <= 0x1FAFF) || (c >= 0x2600 && c <= 0x27BF);
+}
+
+/* Zero-width joiners of emoji sequences. Without shaping they can't combine,
+ * so they are dropped: a ZWJ family shows its members side by side, a
+ * skin-toned hand shows the default tone. */
+bool isInvisible(uint32_t c) {
+    return c == 0x200D || c == 0xFE0E || c == 0xFE0F || c == 0x20E3 || (c >= 0x1F3FB && c <= 0x1F3FF) ||
+           (c >= 0xE0020 && c <= 0xE007F);
+}
+
 bool isSpace(uint32_t c) {
     return c == ' ' || c == '\t' || c == 0x3000;
 }
@@ -38,9 +50,10 @@ bool noLineEnd(uint32_t c) {
 bool canBreakBefore(const std::vector<uint32_t>& cps, size_t i) {
     if (i == 0) return false;
     uint32_t prev = cps[i - 1], cur = cps[i];
+    if (isInvisible(cur)) return false;  // stays with the emoji it modifies
     if (noLineStart(cur) || noLineEnd(prev)) return false;
     if (isSpace(prev) && !isSpace(cur)) return true;
-    if (isCjk(prev) || isCjk(cur)) return !isSpace(cur);
+    if (isCjk(prev) || isCjk(cur) || isEmojiBlock(prev) || isEmojiBlock(cur) || isInvisible(prev)) return !isSpace(cur);
     return prev == '-' || prev == '/';
 }
 
@@ -61,16 +74,31 @@ void measure(FontEngine& fonts, const RichText& text, float size, std::vector<Me
         m.px = static_cast<uint16_t>(std::max(6.0f, std::round(size * st.scale)));
         FontFace want = FontEngine::faceFor(st.family, st.bold);
         if (cp == '\t') cp = ' ';
+        if (isInvisible(cp)) {
+            m.face = want;
+            m.glyph = -1;  // not drawn
+            m.advance = 0;
+            m.asc = m.desc = 0;
+            continue;
+        }
+        // Emoji font first for emoji-default codepoints or an explicit VS16;
+        // VS15 (U+FE0E) asks for the text glyph.
+        uint32_t next = i + 1 < text.cps.size() ? text.cps[i + 1] : 0;
+        if (next != 0xFE0E && (next == 0xFE0F || FontEngine::isEmojiPresentation(cp)) && fonts.hasFace(FACE_EMOJI))
+            want = FACE_EMOJI;
         fonts.resolve(want, cp, m.face, m.glyph);
         m.advance = cp == '\n' ? 0 : fonts.advance(m.face, m.glyph, m.px);
         // Faux bold widens strokes by ~1px; keep the spacing honest.
-        if (st.bold && m.face != FACE_SANS_BOLD && cp != ' ') m.advance += std::max(1.0f, m.px / 24.0f);
+        if (st.bold && m.face != FACE_SANS_BOLD && m.face != FACE_EMOJI && cp != ' ')
+            m.advance += std::max(1.0f, m.px / 24.0f);
         if (i > 0 && cp < 0x2000 && text.cps[i - 1] < 0x2000 && out[i - 1].face == m.face &&
             out[i - 1].px == m.px) {
             out[i - 1].advance += fonts.kern(m.face, out[i - 1].glyph, m.glyph, m.px);
         }
-        m.asc = fonts.ascent(m.face == FACE_ICONS ? FACE_SANS : m.face, m.px);
-        m.desc = fonts.descent(m.face == FACE_ICONS ? FACE_SANS : m.face, m.px);
+        // Symbol fonts would otherwise change the line height.
+        FontFace metrics = m.face == FACE_ICONS || m.face == FACE_EMOJI ? FACE_SANS : m.face;
+        m.asc = fonts.ascent(metrics, m.px);
+        m.desc = fonts.descent(metrics, m.px);
     }
 }
 
@@ -270,6 +298,7 @@ void layoutRichText(FontEngine& fonts, const RichText& text, const LayoutOptions
         bool paraStart = r.begin == 0 || text.cps[r.begin - 1] == '\n';
         LayoutLine line{top, height, lineW, int(out.glyphs.size()), 0, paraStart, 0, height - asc - desc};
         for (size_t k = r.begin; k < visibleEnd; ++k) {
+            if (m[k].glyph < 0) continue;
             out.glyphs.push_back({x, baseline, m[k].advance, m[k].glyph, m[k].px, text.style[k], m[k].face});
             x += m[k].advance;
             // Each CJK character is a word; a Latin word counts once.

@@ -13,6 +13,9 @@
 class DisplayList {
 public:
     void clear();
+    void clip(int x, int y, int w, int h);
+    void resetClip();
+    void append(const DisplayList& other);
 
     void gradient(int x, int y, int w, int h, RGBA top, RGBA bottom);
     void rect(int x, int y, int w, int h, RGBA c);
@@ -31,7 +34,7 @@ public:
     void render(Canvas& canvas, FontEngine& fonts) const;
 
 private:
-    enum class Kind : uint8_t { Gradient, RoundRect, Shadow, Arc, Line, Glyphs };
+    enum class Kind : uint8_t { Gradient, RoundRect, Shadow, Arc, Line, Glyphs, Clip, ResetClip };
     struct Op {
         Kind kind;
         float f[6];

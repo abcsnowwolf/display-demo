@@ -19,6 +19,8 @@ public:
     int bandY() const { return bandY_; }
     int bandHeight() const { return bandH_; }
     const uint16_t* buffer() const { return buf_; }
+    void setClip(int x, int y, int w, int h);
+    void resetClip();
 
     void fillRect(int x, int y, int w, int h, RGBA c);
     // Vertical gradient with ordered dithering to hide RGB565 banding.
@@ -44,4 +46,5 @@ private:
     int width_;
     int bandY_;
     int bandH_;
+    int clipX0_, clipY0_, clipX1_, clipY1_;
 };

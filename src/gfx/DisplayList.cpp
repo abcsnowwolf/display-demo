@@ -8,6 +8,21 @@ void DisplayList::clear() {
     glyphs_.clear();
 }
 
+void DisplayList::clip(int x, int y, int w, int h) {
+    push(Kind::Clip, {float(x), float(y), float(w), float(h)}, {}, {}, 0, 0);
+}
+
+void DisplayList::resetClip() { push(Kind::ResetClip, {}, {}, {}, 0, 0); }
+
+void DisplayList::append(const DisplayList& other) {
+    const uint32_t offset = uint32_t(glyphs_.size());
+    glyphs_.insert(glyphs_.end(), other.glyphs_.begin(), other.glyphs_.end());
+    for (Op op : other.ops_) {
+        if (op.kind == Kind::Glyphs) op.first += offset;
+        ops_.push_back(op);
+    }
+}
+
 void DisplayList::push(Kind kind, std::initializer_list<float> f, RGBA c1, RGBA c2, float top, float bottom) {
     Op op{};
     op.kind = kind;
@@ -88,7 +103,8 @@ void DisplayList::text(const TextLayout& layout, const RichText& rich, float x, 
             const TextStyle& st = rich.styles[g.style];
             float base = dy + g.baseline;
             glyphs_.push_back({x + g.x, int16_t(std::lround(base)), g.px, g.glyph, g.face,
-                               st.bold && g.face != FACE_SANS_BOLD && g.face != FACE_ICONS, st.color});
+                               st.bold && g.face != FACE_SANS_BOLD && g.face != FACE_ICONS && g.face != FACE_EMOJI,
+                               st.color});
             top = std::min(top, base - g.px * 1.1f);
             bottom = std::max(bottom, base + g.px * 0.4f);
         }
@@ -120,9 +136,18 @@ void DisplayList::icon(uint32_t codepoint, float x, float y, float size, RGBA c,
 void DisplayList::render(Canvas& canvas, FontEngine& fonts) const {
     const int bandTop = canvas.bandY(), bandBottom = canvas.bandY() + canvas.bandHeight();
     for (const Op& op : ops_) {
+        // Clip state must be replayed even when its own rectangle misses a band.
+        if (op.kind == Kind::Clip) {
+            canvas.setClip(int(op.f[0]), int(op.f[1]), int(op.f[2]), int(op.f[3]));
+            continue;
+        }
+        if (op.kind == Kind::ResetClip) { canvas.resetClip(); continue; }
         if (op.bottom < bandTop || op.top >= bandBottom) continue;
         const float* f = op.f;
         switch (op.kind) {
+            case Kind::Clip:
+            case Kind::ResetClip:
+                break;
             case Kind::Gradient:
                 canvas.gradientRect(int(f[0]), int(f[1]), int(f[2]), int(f[3]), op.c1, op.c2);
                 break;
@@ -143,6 +168,22 @@ void DisplayList::render(Canvas& canvas, FontEngine& fonts) const {
                     const Glyph& g = glyphs_[i];
                     // Cheap cull before touching the rasterizer.
                     if (g.baseline + g.px * 0.5f < bandTop || g.baseline - g.px * 1.2f >= bandBottom) continue;
+                    int firstLayer = 0;
+                    int layers = g.face == FACE_EMOJI ? fonts.colorLayers(g.face, g.glyph, firstLayer) : 0;
+                    if (layers > 0) {
+                        // Color glyph: paint each outline layer in its palette color.
+                        for (int l = 0; l < layers; ++l) {
+                            int lg;
+                            RGBA lc;
+                            bool fg;
+                            fonts.colorLayer(g.face, firstLayer + l, lg, lc, fg);
+                            const GlyphBitmap* lb = fonts.glyph(g.face, lg, g.px);
+                            if (!lb->alpha) continue;
+                            canvas.mask(int(std::lround(g.x)) + lb->xoff, g.baseline + lb->yoff, lb->w, lb->h, lb->alpha,
+                                        fg ? g.color : lc);
+                        }
+                        continue;
+                    }
                     const GlyphBitmap* bmp = fonts.glyph(g.face, g.glyph, g.px);
                     if (!bmp->alpha) continue;
                     int gx = int(std::lround(g.x)) + bmp->xoff, gy = g.baseline + bmp->yoff;
