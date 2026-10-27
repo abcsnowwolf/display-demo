@@ -5,3 +5,4 @@ build/
 fonts.bin
 tools/sim/out/
 tools/sim/sim
+__pycache__/
